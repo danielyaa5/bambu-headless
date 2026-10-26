@@ -1,5 +1,19 @@
 # Validation scope
 
+## Expanded CLI, version 0.2.0
+
+Verified October 26, 2026 on the same macOS/H2D installation as the original sender:
+
+- Saved-printer discovery returned the configured printer without exposing its access code.
+- Live `status`, two-sample JSON `watch`, offline `inspect`, and JSON `check` completed successfully. The printer remained in `FINISH` throughout.
+- A uniquely named temporary sliced file exercised the real CLI's upload and full read-back, identical-file reuse, download and byte comparison, rename and hash verification, and delete verification. The original remote directory membership was restored.
+- 43 automated tests passed, including the original sender checks, path/overwrite/interrupted-download guards, job monitoring, explicit control confirmation, and compiled native-helper tests using a fake plugin with no networking.
+- The native fixture exercises pause/resume/cancel acknowledgments and state transitions, a job/state change during certificate initialization, printer rejection, and resume with an unresolved error. The original print-start path also passes that fixture.
+
+**No physical pause, resume or cancel was sent, and no additional print was started.** Those hardware transitions remain unverified. The fake plugin validates the helper's control logic and ABI call shape; it does not prove a particular firmware will acknowledge or perform those controls.
+
+All hardware transfer checks used temporary task-owned files. No existing print file was renamed, deleted or overwritten. No GUI was opened or printer mode changed.
+
 ## Hardware observation, October 26, 2026
 
 The original sender was exercised on an Apple silicon Mac with Studio `02.08.02.61`, networking plugin `02.08.02.60`, and an H2D in cloud mode with Developer Mode off.

@@ -110,4 +110,15 @@ class SenderSafetyTests(unittest.TestCase):
         sender.write_private(report, {'started': False})
         self.assertEqual(report.stat().st_mode & 0o777, 0o600)
 
+    def test_legacy_print_upload_refuses_different_existing_file(self):
+        info=self.fixture()
+        for size in (info['bytes'],info['bytes']+1):
+            with self.subTest(size=size),mock.patch.object(sender,'ImplicitFTPS') as client:
+                ftp=client.return_value.__enter__.return_value
+                ftp.size.return_value=size
+                ftp.retrbinary.side_effect=lambda command,callback:callback(b'different')
+                with self.assertRaisesRegex(sender.SendError,'different contents'):
+                    sender.upload_verified(self.path,info,{'ip':'printer.example','serial':'TEST_PRINTER','access_code':'TEST_CODE'})
+                ftp.storbinary.assert_not_called()
+
 if __name__ == '__main__': unittest.main()

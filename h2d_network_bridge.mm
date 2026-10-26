@@ -50,7 +50,9 @@ int main(){@autoreleasepool {
     NSDictionary *cfg=[NSJSONSerialization JSONObjectWithData:input options:0 error:nil];
     if(![cfg isKindOfClass:NSDictionary.class])_exit(3);
     std::string action=str(cfg,@"action"), serial=str(cfg,@"serial"), ip=str(cfg,@"ip");
-    if(action!="status"&&action!="sign_probe"&&action!="start")_exit(3);
+    if(action!="status"&&action!="sign_probe"&&action!="start"&&action!="control")_exit(3);
+    const std::string control=str(cfg,@"control");
+    if(action=="control"&&control!="pause"&&control!="resume"&&control!="stop")_exit(3);
     void *lib=dlopen(str(cfg,@"plugin").c_str(),RTLD_NOW|RTLD_LOCAL);
     if(!lib){emit(@{@"event":@"error",@"message":@"Plugin could not be loaded"});_exit(3);}
     auto version=sym<std::string(*)()>(lib,"bambu_network_get_version")();
@@ -65,8 +67,11 @@ int main(){@autoreleasepool {
     sym<int(*)(void*,std::string)>(lib,"bambu_network_set_country_code")(agent,str(cfg,@"country"));
     std::atomic<bool> connected{false},got_status{false},got_start{false},got_probe{false},rejected{false};
     std::atomic<bool> submitted{false},cert_ready{false};
+    std::atomic<bool> control_ack{false},control_state{false};
     std::mutex state_mutex;
     std::string current_state,current_job;
+    long long current_error=0;
+    bool error_known=false;
     const std::string expected=str(cfg,@"job_name"),sequence=str(cfg,@"sequence_id");
     BBL::OnLocalConnectedFn conn=[&](int status,std::string,std::string){if(status==0)connected=true;};
     BBL::OnPrinterConnectedFn pc=[&](std::string){connected=true;};
@@ -101,7 +106,13 @@ int main(){@autoreleasepool {
             std::lock_guard<std::mutex> lock(state_mutex);
             if(p[@"gcode_state"]){current_state=str(p,@"gcode_state");got_status=true;}
             if(p[@"subtask_name"])current_job=str(p,@"subtask_name");
+            if(p[@"print_error"]){current_error=[p[@"print_error"] longLongValue];error_known=true;}
             if(submitted && current_job==expected && (current_state=="PREPARE"||current_state=="RUNNING"))got_start=true;
+            if(action=="control"&&submitted&&p[@"gcode_state"]){
+                bool same_job=current_job==expected;
+                bool stopped=control=="stop"&&(current_state=="IDLE"||current_state=="FAILED")&&(same_job||current_job.empty());
+                control_state=stopped||(same_job&&((control=="pause"&&current_state=="PAUSE")||(control=="resume"&&current_state=="RUNNING")));
+            }
         }
         if(str(p,@"command")=="extrusion_cali_get" && str(p,@"sequence_id")==sequence){
             got_probe=true;
@@ -109,6 +120,11 @@ int main(){@autoreleasepool {
         }
         if(str(p,@"command")=="project_file" && str(p,@"sequence_id")==sequence){
             if([p[@"err_code"] longLongValue]!=0 || str(p,@"result")=="FAIL" || str(p,@"result")=="fail")rejected=true;
+        }
+        if(action=="control"&&submitted&&str(p,@"command")==control&&str(p,@"sequence_id")==sequence){
+            const auto result=str(p,@"result");
+            if([p[@"err_code"] longLongValue]!=0||result=="FAIL"||result=="fail")rejected=true;
+            else if(result=="SUCCESS"||result=="success")control_ack=true;
         }
         emit(safe);
     }};
@@ -142,6 +158,21 @@ int main(){@autoreleasepool {
     std::string payload;
     if(action=="sign_probe"){
         payload="{\"print\":{\"command\":\"extrusion_cali_get\",\"sequence_id\":\""+sequence+"\",\"filament_id\":\"GFL99\",\"nozzle_diameter\":\"0.4\"}}";
+    }else if(action=="control"){
+        payload=str(cfg,@"payload");
+        NSDictionary *p=parse(payload)[@"print"];
+        if(expected.empty()||str(p,@"command")!=control||str(p,@"sequence_id")!=sequence||str(p,@"param")!="")_exit(3);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex);
+            bool allowed=(control=="pause"&&current_state=="RUNNING")||
+                (control=="resume"&&current_state=="PAUSE"&&error_known&&current_error==0)||
+                (control=="stop"&&(current_state=="PREPARE"||current_state=="RUNNING"||current_state=="PAUSE"));
+            if(current_job!=expected||!allowed){
+                emit(@{@"event":@"error",@"message":@"Job or state changed; control refused"});_exit(5);
+            }
+            submitted=true;
+        }
+        emit(@{@"event":@"dispatching"});
     }else{
         {
             std::lock_guard<std::mutex> lock(state_mutex);
@@ -158,9 +189,10 @@ int main(){@autoreleasepool {
     rc=send(agent,serial,payload,1,0);
     emit(@{@"event":@"send_result",@"rc":@(rc)});
     if(rc!=0)_exit(6);
-    for(int i=0;i<450&&!rejected&&!(action=="start"?got_start.load():got_probe.load());i++)
+    auto complete=[&](){return action=="control"?(control_ack.load()&&control_state.load()):(action=="start"?got_start.load():got_probe.load());};
+    for(int i=0;i<450&&!rejected&&!complete();i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    bool confirmed=action=="start"?got_start.load():got_probe.load();
+    bool confirmed=complete();
     emit(@{@"event":@"verification",@"confirmed":@(confirmed&&!rejected),@"rejected":@(rejected.load())});
     sym<int(*)(void*)>(lib,"bambu_network_disconnect_printer")(agent);
     // Vendor worker teardown may block. Disconnect first; process exit closes

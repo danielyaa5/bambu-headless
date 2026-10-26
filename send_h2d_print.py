@@ -37,6 +37,9 @@ IDLE_STATES = {'IDLE', 'FINISH', 'FAILED'}
 class SendError(Exception):
     pass
 
+class PrinterBusy(SendError):
+    pass
+
 def inspect_file(path: Path, plate: int = 1) -> dict:
     if not path.name.endswith('.gcode.3mf'):
         raise SendError('Select a sliced .gcode.3mf, not an editable project.')
@@ -109,7 +112,9 @@ def ensure_bridge() -> Path:
 def load_connection(host: str, serial: str | None) -> dict:
     try:
         conf = json.loads((CONFIG / 'BambuStudio.conf').read_text())
-        codes = conf.get('access_code', {})
+        codes = dict(conf.get('user_access_code', {}))
+        codes.update({k: v for k, v in conf.get('access_code', {}).items() if v})
+        codes = {k: v for k, v in codes.items() if v}
         if serial is None:
             if len(codes) != 1:
                 raise SendError('Multiple or no saved printers; select the H2D with --serial.')
@@ -126,6 +131,29 @@ def load_connection(host: str, serial: str | None) -> dict:
     except (OSError, ValueError):
         raise SendError('Cannot read the saved Bambu Studio connection configuration.') from None
 
+def saved_printers() -> list[dict]:
+    """List saved identities, never their access-code values or account data."""
+    try:
+        conf = json.loads((CONFIG / 'BambuStudio.conf').read_text())
+        codes = dict(conf.get('user_access_code', {}))
+        codes.update({k: v for k, v in conf.get('access_code', {}).items() if v})
+        return [{'serial': serial, 'access_code_saved': True}
+                for serial in sorted(codes) if codes[serial]]
+    except (OSError, ValueError, TypeError, AttributeError):
+        raise SendError('Cannot read saved printers from Bambu Studio.') from None
+
+@contextlib.contextmanager
+def printer_lock(connection: dict):
+    cache = Path.home() / 'Library/Caches/h2d-headless'
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = hashlib.sha256(connection['serial'].encode()).hexdigest()[:20]
+    with (cache / (key + '.lock')).open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise PrinterBusy('Another headless sender is using this printer.') from None
+        yield cache, key
+
 def bridge_run(connection: dict, action: str, job: dict | None = None) -> tuple[list[dict], int]:
     binary = ensure_bridge()
     with tempfile.TemporaryDirectory(prefix='h2d-headless-') as scratch:
@@ -140,7 +168,7 @@ def bridge_run(connection: dict, action: str, job: dict | None = None) -> tuple[
             result = subprocess.run([str(binary)], input=json.dumps(config), text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=95, env=env)
         except subprocess.TimeoutExpired:
-            raise SendError('Adapter timed out. If start was requested, outcome is uncertain: check the printer before any retry.') from None
+            raise SendError('Adapter timed out. If a command was sent, outcome is uncertain: check the printer before any retry.') from None
         events = []
         for line in result.stdout.splitlines():
             try:
@@ -217,6 +245,7 @@ def upload_verified(path: Path, info: dict, connection: dict) -> str:
             try:
                 if ftp.size('/' + path.name) == info['bytes'] and remote_hash() == info['md5']:
                     return 'existing file verified byte-for-byte'
+                raise SendError('Remote destination exists with different contents; choose a new filename. Print was not submitted.')
             except ftplib.error_perm as e:
                 if not str(e).startswith('550'):
                     raise
@@ -268,14 +297,7 @@ def main(argv=None) -> int:
     info = inspect_file(path, args.plate)
     connection = load_connection(args.host, args.serial)
     # Serialize all runs for this printer, including the final fresh-status check.
-    cache = Path.home() / 'Library/Caches/h2d-headless'
-    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-    printer_key = hashlib.sha256(connection['serial'].encode()).hexdigest()[:20]
-    with (cache / (printer_key + '.lock')).open('a') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise SendError('Another headless sender is using this printer.') from None
+    with printer_lock(connection) as (cache, printer_key):
         return run_locked(args, path, info, connection, cache, printer_key)
 
 def run_locked(args, path, info, connection, cache, printer_key) -> int:
