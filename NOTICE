@@ -1,0 +1,13 @@
+bambu-headless
+Copyright (C) 2026 Daniel Yakobian
+
+Original wrapper sources and documentation are licensed under GNU AGPL v3.
+See LICENSE. There is no warranty, to the extent permitted by applicable law.
+
+vendor/bambu_networking.hpp is an unmodified file from BambuStudio,
+tag v02.08.02.61, src/slic3r/Utils/bambu_networking.hpp.
+Its upstream GNU AGPL v3 license is preserved in vendor/LICENSE.BambuStudio.
+Copyright in that file remains with its upstream authors.
+
+No proprietary Bambu networking plugin, application, certificates, keys or
+account configuration are distributed in this repository.

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+/h2d_network_bridge
+/h2d_host_identity.dylib
+*.gcode
+*.3mf
+*.log
+/reports/
+.env
+.env.*
