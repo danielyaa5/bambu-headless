@@ -50,9 +50,11 @@ int main(){@autoreleasepool {
     NSDictionary *cfg=[NSJSONSerialization JSONObjectWithData:input options:0 error:nil];
     if(![cfg isKindOfClass:NSDictionary.class])_exit(3);
     std::string action=str(cfg,@"action"), serial=str(cfg,@"serial"), ip=str(cfg,@"ip");
-    if(action!="status"&&action!="sign_probe"&&action!="start"&&action!="control")_exit(3);
+    if(action!="status"&&action!="sign_probe"&&action!="start"&&action!="control"&&action!="bed_temp")_exit(3);
     const std::string control=str(cfg,@"control");
     if(action=="control"&&control!="pause"&&control!="resume"&&control!="stop")_exit(3);
+    const long long target_bed=[cfg[@"target_c"] isKindOfClass:NSNumber.class]?[cfg[@"target_c"] longLongValue]:-1;
+    if(action=="bed_temp"&&(target_bed<0||target_bed>120))_exit(3);
     void *lib=dlopen(str(cfg,@"plugin").c_str(),RTLD_NOW|RTLD_LOCAL);
     if(!lib){emit(@{@"event":@"error",@"message":@"Plugin could not be loaded"});_exit(3);}
     auto version=sym<std::string(*)()>(lib,"bambu_network_get_version")();
@@ -67,7 +69,7 @@ int main(){@autoreleasepool {
     sym<int(*)(void*,std::string)>(lib,"bambu_network_set_country_code")(agent,str(cfg,@"country"));
     std::atomic<bool> connected{false},got_status{false},got_start{false},got_probe{false},rejected{false};
     std::atomic<bool> submitted{false},cert_ready{false};
-    std::atomic<bool> control_ack{false},control_state{false};
+    std::atomic<bool> control_ack{false},control_state{false},bed_ack{false},bed_state{false};
     std::mutex state_mutex;
     std::string current_state,current_job;
     long long current_error=0;
@@ -113,6 +115,9 @@ int main(){@autoreleasepool {
                 bool stopped=control=="stop"&&(current_state=="IDLE"||current_state=="FAILED")&&(same_job||current_job.empty());
                 control_state=stopped||(same_job&&((control=="pause"&&current_state=="PAUSE")||(control=="resume"&&current_state=="RUNNING")));
             }
+            if(action=="bed_temp"&&submitted&&p[@"bed_target_temper"]){
+                if([p[@"bed_target_temper"] longLongValue]==target_bed)bed_state=true;
+            }
         }
         if(str(p,@"command")=="extrusion_cali_get" && str(p,@"sequence_id")==sequence){
             got_probe=true;
@@ -125,6 +130,11 @@ int main(){@autoreleasepool {
             const auto result=str(p,@"result");
             if([p[@"err_code"] longLongValue]!=0||result=="FAIL"||result=="fail")rejected=true;
             else if(result=="SUCCESS"||result=="success")control_ack=true;
+        }
+        if(action=="bed_temp"&&submitted&&str(p,@"command")=="gcode_line"&&str(p,@"sequence_id")==sequence){
+            const auto result=str(p,@"result");
+            if([p[@"err_code"] longLongValue]!=0||result=="FAIL"||result=="fail")rejected=true;
+            else if(result=="SUCCESS"||result=="success")bed_ack=true;
         }
         emit(safe);
     }};
@@ -158,6 +168,21 @@ int main(){@autoreleasepool {
     std::string payload;
     if(action=="sign_probe"){
         payload="{\"print\":{\"command\":\"extrusion_cali_get\",\"sequence_id\":\""+sequence+"\",\"filament_id\":\"GFL99\",\"nozzle_diameter\":\"0.4\"}}";
+    }else if(action=="bed_temp"){
+        payload=str(cfg,@"payload");
+        NSDictionary *p=parse(payload)[@"print"];
+        const std::string expected_param="M140 S"+std::to_string(target_bed)+"\n";
+        if(str(p,@"command")!="gcode_line"||str(p,@"sequence_id")!=sequence||str(p,@"param")!=expected_param)_exit(3);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex);
+            bool idle=(current_state=="IDLE"||current_state=="FINISH"||current_state=="FAILED");
+            bool matched_active=!expected.empty()&&current_job==expected&&(current_state=="PREPARE"||current_state=="RUNNING"||current_state=="PAUSE");
+            if(!idle&&!matched_active){
+                emit(@{@"event":@"error",@"message":@"Job or state changed; bed temperature refused"});_exit(5);
+            }
+            submitted=true;
+        }
+        emit(@{@"event":@"dispatching"});
     }else if(action=="control"){
         payload=str(cfg,@"payload");
         NSDictionary *p=parse(payload)[@"print"];
@@ -189,7 +214,11 @@ int main(){@autoreleasepool {
     rc=send(agent,serial,payload,1,0);
     emit(@{@"event":@"send_result",@"rc":@(rc)});
     if(rc!=0)_exit(6);
-    auto complete=[&](){return action=="control"?(control_ack.load()&&control_state.load()):(action=="start"?got_start.load():got_probe.load());};
+    auto complete=[&](){
+        if(action=="control")return control_ack.load()&&control_state.load();
+        if(action=="bed_temp")return bed_state.load()&&!rejected.load();
+        return action=="start"?got_start.load():got_probe.load();
+    };
     for(int i=0;i<450&&!rejected&&!complete();i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     bool confirmed=complete();

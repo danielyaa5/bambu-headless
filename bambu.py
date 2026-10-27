@@ -142,6 +142,64 @@ def confirmed_control(events: list[dict], command: str, sequence: str, job: str)
     return dispatched and acknowledged and changed and not rejected
 
 
+def bed_temp_preflight(status: dict, temp: int, job: str | None = None):
+    if not 0 <= temp <= 120:
+        raise core.SendError('Bed temperature must be between 0 and 120 C.')
+    state = status.get('gcode_state')
+    if state in core.IDLE_STATES:
+        if job and status.get('subtask_name') != job:
+            raise core.SendError('Current job does not match --job; bed temperature refused.')
+        return
+    if state in ACTIVE:
+        if not job or status.get('subtask_name') != job:
+            raise core.SendError('Printer has an active job; pass the exact --job name from status to change bed temperature.')
+        return
+    raise core.SendError('Printer state is unknown; bed temperature refused.')
+
+
+def confirmed_bed_temp(events: list[dict], temp: int, sequence: str) -> bool:
+    dispatched, changed, rejected = False, False, False
+    for event in events:
+        if event.get('event') == 'dispatching':
+            dispatched = True
+        if not dispatched:
+            continue
+        if event.get('command') == 'gcode_line' and str(event.get('sequence_id')) == sequence:
+            rejected |= event.get('err_code', 0) not in (0, '0') or str(event.get('result', '')).upper() == 'FAIL'
+        if event.get('command') == 'push_status' and 'bed_target_temper' in event:
+            try:
+                changed = round(float(event['bed_target_temper'])) == temp
+            except (TypeError, ValueError):
+                changed = False
+    return dispatched and changed and not rejected
+
+
+def set_bed_temp(args, connection: dict) -> int:
+    if not 0 <= args.temperature <= 120:
+        raise core.SendError('Bed temperature must be between 0 and 120 C.')
+    with core.printer_lock(connection) as (cache, key):
+        status = live_status(connection)
+        bed_temp_preflight(status, args.temperature, args.job)
+        sequence = str(20000 + time.time_ns() % 9998)
+        payload = {'print': {'command': 'gcode_line', 'param': f'M140 S{args.temperature}\n', 'sequence_id': sequence}}
+        receipt = cache / f'{key}-bed-temp-{time.time_ns()}.json'
+        result = {'command': 'bed-temp', 'target_c': args.temperature, 'attempted': True, 'confirmed': False}
+        if args.job:
+            result['job'] = args.job
+        core.write_private(receipt, result)
+        events, rc = core.bridge_run(connection, 'bed_temp', {
+            'target_c': args.temperature, 'job_name': args.job or '', 'sequence_id': sequence,
+            'payload': json.dumps(payload, separators=(',', ':'))})
+        result['confirmed'] = rc == 0 and confirmed_bed_temp(events, args.temperature, sequence)
+        result['status'] = snapshot(core.merged_status(events)) if any(e.get('gcode_state') for e in events) else {}
+        core.write_private(receipt, result)
+        bed_c = result['status'].get('bed_c', status.get('bed_temper', '?'))
+        output(args, result, f"Bed target: {'confirmed' if result['confirmed'] else 'UNCONFIRMED'} at {args.temperature} C (current {bed_c} C).")
+        if not result['confirmed']:
+            raise core.SendError('Bed temperature outcome is uncertain or rejected. Check status before issuing another command; no automatic retry was made.')
+    return 0
+
+
 def control(args, connection: dict) -> int:
     if not args.yes:
         raise core.SendError('Job controls require --yes and the exact --job name from status.')
@@ -240,6 +298,10 @@ def build_parser():
         options(p)
         p.add_argument('--job', required=True, help='Exact job name shown by status')
         p.add_argument('--yes', action='store_true', help='Explicitly send the control command')
+    bed = sub.add_parser('bed-temp', help='Set target bed temperature in Celsius (0..120)')
+    options(bed)
+    bed.add_argument('temperature', type=int, help='Target bed temperature in Celsius (0..120)')
+    bed.add_argument('--job', help='Exact job name if setting bed temperature during an active job')
     return parser
 
 
@@ -258,6 +320,8 @@ def main(argv=None) -> int:
     if args.command == 'watch':
         if not 1 <= args.interval <= 3600 or not 0 <= args.timeout <= 86400 or args.count < 0:
             parser.error('Use interval 1..3600, timeout 0..86400 and a nonnegative count.')
+    if args.command == 'bed-temp' and not 0 <= args.temperature <= 120:
+        raise core.SendError('Bed temperature must be between 0 and 120 C.')
     if args.command in ('check', 'print'):
         return legacy_print(args)
     if args.command in CONTROL_STATES and not args.yes:
@@ -267,6 +331,8 @@ def main(argv=None) -> int:
     connection = core.load_connection(args.host, args.serial)
     if args.command == 'watch':
         return monitor(args, connection)
+    if args.command == 'bed-temp':
+        return set_bed_temp(args, connection)
     if args.command in CONTROL_STATES:
         return control(args, connection)
     with core.printer_lock(connection):

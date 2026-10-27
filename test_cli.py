@@ -189,6 +189,18 @@ class CLITests(unittest.TestCase):
     def test_cancel_does_not_claim_natural_finish_as_confirmed_cancel(self):
         events=[{'event':'dispatching'},{'command':'stop','sequence_id':'42','result':'SUCCESS'},{'command':'push_status','gcode_state':'FINISH','subtask_name':'fixture.gcode'}]
         self.assertFalse(bambu.confirmed_control(events,'cancel','42','fixture.gcode'))
+    def test_bed_temp_bounds_active_job_guard_and_confirmation(self):
+        for temp in (-1, 121):
+            with self.assertRaises(core.SendError): bambu.bed_temp_preflight(self.status('FINISH'),temp)
+        with self.assertRaisesRegex(core.SendError,'active job'):
+            bambu.bed_temp_preflight(self.status('RUNNING'),55)
+        bambu.bed_temp_preflight(self.status('RUNNING'),55,'fixture.gcode')
+        bambu.bed_temp_preflight(self.status('FINISH'),55)
+        dispatch={'event':'dispatching'}
+        target={'command':'push_status','bed_temper':24.5,'bed_target_temper':55}
+        self.assertFalse(bambu.confirmed_bed_temp([target,dispatch],55,'42'))
+        self.assertFalse(bambu.confirmed_bed_temp([dispatch,target,{'command':'gcode_line','sequence_id':'42','result':'FAIL'}],55,'42'))
+        self.assertTrue(bambu.confirmed_bed_temp([dispatch,target],55,'42'))
     def run_watch(self, statuses, **kwargs):
         with mock.patch.object(core,'printer_lock',side_effect=lambda _:nullcontext()),mock.patch.object(bambu,'live_status',side_effect=statuses),mock.patch.object(bambu.time,'sleep'),redirect_stdout(io.StringIO()) as out:
             rc=bambu.monitor(self.args(**kwargs),{})

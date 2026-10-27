@@ -70,7 +70,10 @@ python3 bambu.py print part.gcode.3mf --tray 1
 python3 bambu.py pause --job part.gcode --yes
 python3 bambu.py resume --job part.gcode --yes
 python3 bambu.py cancel --job part.gcode --yes
+python3 bambu.py bed-temp 55
 ```
+
+`bed-temp` sets the target bed temperature (`0..120` C) with a single `gcode_line` (`M140 S<temp>`) command and waits for post-dispatch telemetry to report `bed_target_temper` matching the target. If a job is active, pass `--job` with the exact job name from `status`.
 
 `print` uses the original sender, including its receipt written before dispatch, file/nozzle/material checks and matching-job start confirmation. `--repeat` deliberately allows another attempt for a previously submitted file. The original `send_h2d_print.py FILE --host HOST --start` form remains supported.
 

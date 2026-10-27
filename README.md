@@ -57,6 +57,7 @@ python3 bambu.py files list
 | `print FILE` | Upload and start, preserving the original submission guards |
 | `files list/download/rename/delete` | Printer storage management; deletion requires `--yes` |
 | `pause/resume/cancel` | One control command, requiring `--yes` and the exact `--job` name |
+| `bed-temp TEMP` | Set target bed temperature (`0..120` C) via `M140 S<TEMP>` and confirm target telemetry |
 
 See the [command guide](docs/commands.md) for examples, automation output and exit codes. Destructive file operations are limited to `.gcode.3mf`; uploads and renames refuse to replace different existing files. Storage mutations require an idle printer.
 

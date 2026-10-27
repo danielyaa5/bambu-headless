@@ -6,9 +6,10 @@ static BBL::OnMessageFn message;
 static BBL::OnLocalConnectedFn connected;
 static std::string scenario;
 
-static void status(const std::string &state, const std::string &job="fixture.gcode", int error=0) {
+static void status(const std::string &state, const std::string &job="fixture.gcode", int error=0, int bed_target=-1) {
+    std::string extra=bed_target>=0?(",\"bed_temper\":25,\"bed_target_temper\":"+std::to_string(bed_target)):"";
     message("TEST_PRINTER", "{\"print\":{\"command\":\"push_status\",\"gcode_state\":\""+state+
-            "\",\"subtask_name\":\""+job+"\",\"print_error\":"+std::to_string(error)+"}}");
+            "\",\"subtask_name\":\""+job+"\",\"print_error\":"+std::to_string(error)+extra+"}}");
 }
 
 extern "C" {
@@ -34,10 +35,19 @@ void bambu_network_install_device_cert(void *, std::string, bool) {
 }
 int bambu_network_send_message_to_printer(void *, std::string, std::string payload, int, int) {
     if(payload.find("pushall")!=std::string::npos) {
-        if(scenario=="start")status("FINISH","old.gcode");
+        if(scenario=="start"||scenario=="bed_temp")status("FINISH","old.gcode");
         else if(scenario=="resume")status("PAUSE");
         else if(scenario=="resume-error")status("PAUSE","fixture.gcode",123);
         else status("RUNNING");
+        return 0;
+    }
+    if(payload.find("gcode_line")!=std::string::npos) {
+        if(scenario=="rejected") {
+            message("TEST_PRINTER","{\"print\":{\"command\":\"gcode_line\",\"sequence_id\":\"42\",\"result\":\"FAIL\",\"err_code\":123}}");
+            return 0;
+        }
+        message("TEST_PRINTER","{\"print\":{\"command\":\"gcode_line\",\"sequence_id\":\"42\",\"result\":\"SUCCESS\",\"err_code\":0}}");
+        status("FINISH","old.gcode",0,55);
         return 0;
     }
     std::string command=payload.find("project_file")!=std::string::npos?"project_file":

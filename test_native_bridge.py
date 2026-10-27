@@ -58,6 +58,18 @@ class NativeBridgeTests(unittest.TestCase):
         rc,events=self.run_bridge('pause','gcode_line')
         self.assertEqual(rc,3)
         self.assertEqual(events,[])
+    def test_bed_temp_confirms_target_and_rejects_arbitrary_gcode(self):
+        cfg={'action':'bed_temp','target_c':55,'job_name':'','sequence_id':'42',
+             'scratch':'bed_temp','plugin':str(self.plugin),'serial':'TEST_PRINTER',
+             'payload':json.dumps({'print':{'command':'gcode_line','sequence_id':'42','param':'M140 S55\n'}})}
+        result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
+        events=[json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode,0)
+        self.assertTrue(events[-1]['confirmed'])
+        self.assertTrue(any(e.get('bed_target_temper')==55 for e in events))
+        for bad in [cfg|{'target_c':150},cfg|{'payload':json.dumps({'print':{'command':'gcode_line','sequence_id':'42','param':'G28\n'}})}]:
+            bad_res=subprocess.run([str(self.binary)],input=json.dumps(bad),capture_output=True,text=True,timeout=5)
+            self.assertEqual(bad_res.returncode,3)
 
 
 if __name__ == '__main__':
