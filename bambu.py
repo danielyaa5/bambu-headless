@@ -236,6 +236,8 @@ def legacy_print(args) -> int:
             argv += ['--start']
         if args.repeat:
             argv += ['--repeat']
+        if args.no_timelapse:
+            argv += ['--no-timelapse']
         with contextlib.redirect_stdout(sys.stderr if args.json else sys.stdout):
             rc = core.main(argv)
         if args.json:
@@ -275,6 +277,7 @@ def build_parser():
         p.add_argument('--plate', type=int, default=1)
         p.add_argument('--tray', type=int, default=1)
         p.add_argument('--repeat', action='store_true', help='Intentionally reprint a file with an existing receipt')
+        p.add_argument('--no-timelapse', action='store_true', help='Skip the printer camera timelapse for this job')
     upload = sub.add_parser('upload', help='Upload and verify a sliced file without starting it')
     options(upload)
     upload.add_argument('file', type=Path)

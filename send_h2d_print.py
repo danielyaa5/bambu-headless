@@ -198,13 +198,13 @@ def preflight(status: dict, info: dict, tray: int) -> None:
     if len(nozzles) != 1 or float(nozzles[0].get('diameter', 0)) != info['right_nozzle_mm']:
         raise SendError('Live right-nozzle diameter does not match the sliced file.')
 
-def print_payload(info: dict, tray: int, sequence: str) -> dict:
+def print_payload(info: dict, tray: int, sequence: str, timelapse: bool = True) -> dict:
     # Right logical nozzle is already baked into this slice (filament_maps=2).
     # H2D hardware nozzle id 0 is right; AMS 0/slot 1 is A2.
     return {'print': dict(command='project_file', sequence_id=sequence, param=info['param'],
                           project_id='0', profile_id='0', task_id='0', subtask_id='0',
                           subtask_name=info['filename'][:-4], url='ftp://' + info['filename'],
-                          md5='from_sd_card', timelapse=False, bed_type=info['bed_type'],
+                          md5='from_sd_card', timelapse=timelapse, bed_type=info['bed_type'],
                           bed_leveling=True, auto_bed_leveling=2, flow_cali=False,
                           vibration_cali=True, layer_inspect=True, use_ams=True,
                           ams_mapping=[tray], ams_mapping2=[{'ams_id': tray // 4, 'slot_id': tray % 4}],
@@ -289,6 +289,7 @@ def main(argv=None) -> int:
     parser.add_argument('--start', action='store_true', help='Upload and submit one print after preflight')
     parser.add_argument('--repeat', action='store_true', help='Explicitly permit another attempt for this file after checking prior outcome')
     parser.add_argument('--sign-probe', action='store_true', help='Read-only calibration probe; does not prove print authorization')
+    parser.add_argument('--no-timelapse', action='store_true', help='Skip the printer camera timelapse for this job')
     parser.add_argument('--report', type=Path, help='Save a sanitized verification report (no access codes, tokens, serial or host)')
     args = parser.parse_args(argv)
     if not 0 <= args.tray < 16:
@@ -301,7 +302,8 @@ def main(argv=None) -> int:
         return run_locked(args, path, info, connection, cache, printer_key)
 
 def run_locked(args, path, info, connection, cache, printer_key) -> int:
-    report = {'file': info, 'ams_tray': args.tray, 'gui_used': False, 'helper_path_shim': True, 'started': False}
+    report = {'file': info, 'ams_tray': args.tray, 'timelapse': not args.no_timelapse,
+              'gui_used': False, 'helper_path_shim': True, 'started': False}
     print(f"File checked: {info['filename']} | {info['material']} | right 0.4 mm | AMS tray {args.tray}", flush=True)
     events, rc = bridge_run(connection, 'status')
     if rc:
@@ -324,7 +326,7 @@ def run_locked(args, path, info, connection, cache, printer_key) -> int:
         report['upload'] = upload_verified(path, info, connection)
         print('Storage: ' + report['upload'] + '.', flush=True)
         sequence = str(20000 + time.time_ns() % 9998)
-        payload = print_payload(info, args.tray, sequence)
+        payload = print_payload(info, args.tray, sequence, timelapse=report['timelapse'])
         job_name = payload['print']['subtask_name']
         # Persist BEFORE dispatch. Unknown outcomes must never silently resubmit.
         report.update(submission_attempted=True, submitted_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))

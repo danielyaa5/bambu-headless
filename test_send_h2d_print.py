@@ -60,6 +60,10 @@ class SenderSafetyTests(unittest.TestCase):
         self.assertEqual(payload['nozzle_mapping'],[0])
         self.assertTrue(payload['url'].startswith('ftp://fixture.'))
         self.assertNotIn('gcode',payload)
+    def test_payload_records_camera_timelapse_unless_disabled(self):
+        info=self.fixture()
+        self.assertIs(sender.print_payload(info,1,'22000')['print']['timelapse'],True)
+        self.assertIs(sender.print_payload(info,1,'22000',timelapse=False)['print']['timelapse'],False)
 
     def run_cli(self, *flags, outcome=None, state='FINISH'):
         connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}
@@ -96,6 +100,19 @@ class SenderSafetyTests(unittest.TestCase):
             self.run_cli('--start')
         self.last_upload.assert_not_called()
         self.assertEqual([c.args[1] for c in self.last_bridge.call_args_list], ['status'])
+
+    def test_timelapse_choice_reaches_payload_receipt_and_report(self):
+        self.fixture()
+        report = Path(self.temp.name)/'report.json'
+        for flags, expected in [((), True), (('--no-timelapse',), False)]:
+            with self.subTest(flags=flags):
+                with self.assertRaisesRegex(sender.SendError, 'Start was not confirmed'):
+                    self.run_cli('--start', '--repeat', '--report', str(report), *flags)
+                job = self.last_bridge.call_args_list[-1].args[2]
+                self.assertIs(json.loads(job['payload'])['print']['timelapse'], expected)
+                receipt = next((Path(self.temp.name)/'Library/Caches/h2d-headless').glob('*.json'))
+                self.assertIs(json.loads(receipt.read_text())['timelapse'], expected)
+                self.assertIs(json.loads(report.read_text())['timelapse'], expected)
 
     def test_repeat_still_refuses_running_printer(self):
         self.fixture()

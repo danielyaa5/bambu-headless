@@ -232,6 +232,11 @@ class CLITests(unittest.TestCase):
             with mock.patch.object(core,'main',return_value=0) as legacy:
                 bambu.main([verb,'fixture.gcode.3mf','--host','printer.example'])
                 self.assertEqual('--start' in legacy.call_args.args[0],start)
+    def test_print_forwards_no_timelapse_only_when_asked(self):
+        for flags,forwarded in [([],False),(['--no-timelapse'],True)]:
+            with mock.patch.object(core,'main',return_value=0) as legacy:
+                bambu.main(['print','fixture.gcode.3mf','--host','printer.example',*flags])
+                self.assertEqual('--no-timelapse' in legacy.call_args.args[0],forwarded)
     def test_file_listing_json_is_parseable_and_terminal_text_escaped(self):
         listing=[{'path':'/file.gcode.3mf','name':'file.gcode.3mf','bytes':3,'type':'file'}]
         with mock.patch.object(core,'load_connection',return_value={}),mock.patch.object(core,'printer_lock',return_value=nullcontext()),mock.patch.object(files,'list_files',return_value=listing),redirect_stdout(io.StringIO()) as out:

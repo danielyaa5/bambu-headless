@@ -75,7 +75,7 @@ python3 bambu.py bed-temp 55
 
 `bed-temp` sets the target bed temperature (`0..120` C) with a single `gcode_line` (`M140 S<temp>`) command and waits for post-dispatch telemetry to report `bed_target_temper` matching the target. If a job is active, pass `--job` with the exact job name from `status`.
 
-`print` uses the original sender, including its receipt written before dispatch, file/nozzle/material checks and matching-job start confirmation. `--repeat` deliberately allows another attempt for a previously submitted file. The original `send_h2d_print.py FILE --host HOST --start` form remains supported.
+`print` uses the original sender, including its receipt written before dispatch, file/nozzle/material checks and matching-job start confirmation. `--repeat` deliberately allows another attempt for a previously submitted file. The printer's camera timelapse is recorded by default; `--no-timelapse` skips it for that job. The original `send_h2d_print.py FILE --host HOST --start` form remains supported.
 
 Pause requires `RUNNING`; resume requires `PAUSE` and a reported zero print-error value; cancel accepts `PREPARE`, `RUNNING` or `PAUSE`. All three require an exact job name and `--yes`. The native helper rechecks the job and permitted state after certificate initialization and before dispatch. These checks do not override the printer's interlocks or resolve physical faults.
 
