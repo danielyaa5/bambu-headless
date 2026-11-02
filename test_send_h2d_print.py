@@ -24,16 +24,17 @@ class SenderSafetyTests(unittest.TestCase):
         patcher = mock.patch.dict(sender.os.environ, {'XDG_CACHE_HOME': str(Path(self.temp.name) / '.cache')})
         patcher.start()
         self.addCleanup(patcher.stop)
-    def fixture(self, mapping='2', checksum=None, material='PLA'):
+    def fixture(self, mapping='2', checksum=None, material='PLA', model='Bambu Lab H2D', diameter='0.4', plate_model=None):
         gcode = b'; validation fixture only\n'
         with zipfile.ZipFile(self.path, 'w') as z:
-            z.writestr('Metadata/project_settings.config', json.dumps({'printer_model':'Bambu Lab H2D','curr_bed_type':'High Temp Plate','layer_height':'0.2'}))
+            z.writestr('Metadata/project_settings.config', json.dumps({'printer_model':model,'curr_bed_type':'High Temp Plate','layer_height':'0.2'}))
             z.writestr('Metadata/plate_1.gcode', gcode)
             z.writestr('Metadata/plate_1.gcode.md5', checksum or hashlib.md5(gcode).hexdigest())
-            z.writestr('Metadata/slice_info.config', f'<config><plate><metadata key="index" value="1"/><metadata key="filament_maps" value="{mapping}"/><metadata key="prediction" value="10"/><metadata key="weight" value="1"/><filament id="1" type="{material}" nozzle_diameter="0.4" color="#FFFFFF"/></plate></config>')
+            model_meta=f'<metadata key="printer_model_id" value="{plate_model}"/>' if plate_model else ''
+            z.writestr('Metadata/slice_info.config', f'<config><plate>{model_meta}<metadata key="index" value="1"/><metadata key="filament_maps" value="{mapping}"/><metadata key="prediction" value="10"/><metadata key="weight" value="1"/><filament id="1" type="{material}" nozzle_diameter="{diameter}" color="#FFFFFF"/></plate></config>')
         return sender.inspect_file(self.path)
     def status(self, state='FINISH', material='PLA', diameter=.4):
-        return {'gcode_state':state,'trays':[{'ams_id':'0','id':'1','tray_type':material}],'nozzles':[{'id':0,'diameter':diameter}]}
+        return {'gcode_state':state,'model_id':'O1D','trays':[{'ams_id':'0','id':'1','tray_type':material}],'nozzles':[{'id':0,'diameter':diameter}]}
     def test_valid_right_nozzle_file_and_a2(self):
         sender.preflight(self.status(), self.fixture(), 1)
     def test_corrupted_embedded_gcode_rejected(self):
@@ -68,6 +69,29 @@ class SenderSafetyTests(unittest.TestCase):
         info=self.fixture()
         self.assertIs(sender.print_payload(info,1,'22000')['print']['timelapse'],True)
         self.assertIs(sender.print_payload(info,1,'22000',timelapse=False)['print']['timelapse'],False)
+    def test_p1s_slice_preflight_and_single_nozzle_payload(self):
+        info=self.fixture(model='Bambu Lab P1S',mapping='1 1 1 1 1',plate_model='C12',material='PETG')
+        status=self.status(material='PETG')|{'model_id':'C12','nozzle_diameter':'0.4'}
+        status.pop('nozzles')
+        sender.preflight(status,info,1)
+        payload=sender.print_payload(info,1,'42')['print']
+        self.assertEqual(payload['ams_mapping'],[1])
+        self.assertEqual(payload['url'],'ftp:///fixture.gcode.3mf')
+        self.assertEqual(payload['md5'],info['md5'])
+        self.assertFalse(payload['layer_inspect'])
+        for field in ('nozzle_mapping','nozzle_offset_cali','extrude_cali_flag','ams_mapping2'):
+            self.assertNotIn(field,payload)
+        for changes in ({'model_id':'O1D'},{'model_id':None},{'nozzle_diameter':None},
+                        {'nozzle_diameter':'0.6'},{'nozzle_diameter':'invalid'},{'gcode_state':'RUNNING'}):
+            with self.subTest(changes=changes),self.assertRaises(sender.SendError):
+                sender.preflight(status|changes,info,1)
+        with self.assertRaises(sender.SendError):
+            sender.preflight(status|{'trays':[]},info,1)
+    def test_p1s_rejects_wrong_model_mapping_nozzle_and_checksum(self):
+        for changes in ({'model':'Bambu Lab A1'},{'mapping':'2'},{'mapping':'1 2'},{'mapping':''},
+                        {'plate_model':'O1D'},{'diameter':'0.6'},{'checksum':'0'*32}):
+            with self.subTest(changes=changes),self.assertRaises(sender.SendError):
+                self.fixture(**({'model':'Bambu Lab P1S','mapping':'1'}|changes))
 
     def run_cli(self, *flags, outcome=None, state='FINISH'):
         connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}
@@ -141,5 +165,28 @@ class SenderSafetyTests(unittest.TestCase):
                 with self.assertRaisesRegex(sender.SendError,'different contents'):
                     sender.upload_verified(self.path,info,{'ip':'printer.example','serial':'TEST_PRINTER','access_code':'TEST_CODE'})
                 ftp.storbinary.assert_not_called()
+
+    def test_p1s_upload_finishes_when_tls_peer_omits_close_notify(self):
+        class DataSocket:
+            def __init__(self): self.data=b''; self.closed=False; self.unwrapped=False
+            def __enter__(self): return self
+            def __exit__(self,*args): self.closed=True
+            def sendall(self,data): self.data+=data
+            def unwrap(self):
+                self.unwrapped=True
+                if omit_notify: raise TimeoutError('peer did not send close_notify')
+        for serial,omit_notify in [('01P_TEST',True),('H2D_TEST',False)]:
+            with self.subTest(serial=serial):
+                data=DataSocket()
+                ftp=sender.ImplicitFTPS.__new__(sender.ImplicitFTPS)
+                ftp.host=serial;ftp.voidcmd=mock.Mock();ftp.transfercmd=mock.Mock(return_value=data)
+                def completed():
+                    self.assertTrue(data.closed)
+                    self.assertEqual(data.data,b'fixture bytes')
+                    return '226 Transfer complete'
+                ftp.voidresp=completed
+                with mock.patch.object(sender.ftplib,'_SSLSocket',DataSocket):
+                    self.assertEqual(ftp.storbinary('STOR fixture',io.BytesIO(b'fixture bytes'),4),'226 Transfer complete')
+                self.assertEqual(data.unwrapped,not omit_notify)
 
 if __name__ == '__main__': unittest.main()

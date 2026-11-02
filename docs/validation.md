@@ -1,5 +1,38 @@
 # Validation scope
 
+## Linux/P1S, November 2, 2026
+
+Tested on a Debian x86-64 Docker host with an Ubuntu 24.04 container, Studio
+`02.08.02.61`, Linux networking plugin `02.08.02.54`, and P1S firmware `01.10.00.00`.
+The test slice uses one PETG filament, AMS A2, a 0.4 mm nozzle, and Textured PEI Plate.
+
+- Slice checksum, plate/model, single-extruder mapping, live model/identity, AMS
+  material, and nozzle diameter checks passed through the CLI.
+- One signed `project_file` submission was acknowledged successfully and the
+  matching job entered PREPARE, then RUNNING and advanced through printed layers.
+- Pause confirmed PAUSE at layer 4. Resume confirmed RUNNING and subsequent
+  telemetry advanced through layers 5 and 6. Cancel confirmed the stopped job at
+  layer 9. A separate status query reported print_error 0 and both heater targets
+  at 0°C. Each control used its normal exact-job/state checks and required a
+  matching acknowledgment plus post-dispatch telemetry.
+- Bed-target commands at 35°C and back to 0°C each received matching telemetry.
+  The bed was already warmer than 35°C; this verifies target control, not a
+  heating-performance measurement.
+- A fresh upload completed with full read-back verification. The P1S withheld
+  TLS close_notify on the original path after accepting all file bytes; a traced
+  shutdown call timed out after 20 seconds. The P1S-specific completion path
+  closed the encrypted data connection, required the FTP success reply, and
+  verified all bytes and the checksum without that timeout.
+- CLI download and rename preserved the test file's size and checksum; deletion
+  was verified. Both temporary upload probes were removed from printer storage.
+- All 54 offline tests passed on Linux. On macOS, 53 passed and the Linux-only
+  shim test was skipped; the shared bridge also read live P1S status successfully.
+
+The October H2D print observations below used the original Objective-C++ bridge.
+The shared C++ bridge has not been retested on a physical H2D.
+The P1S test was deliberately canceled; it does not establish natural completion,
+part quality, or sustained automation reliability.
+
 ## Expanded CLI, version 0.2.0
 
 Verified October 26, 2026 on the same macOS/H2D installation as the original sender:

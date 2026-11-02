@@ -55,6 +55,8 @@ int main(){
     if(!cfg.is_object())_exit(3);
     std::string action=str(cfg,"action"), serial=str(cfg,"serial"), ip=str(cfg,"ip");
     if(action!="status"&&action!="sign_probe"&&action!="start"&&action!="control"&&action!="bed_temp")_exit(3);
+    const std::string expected_model=str(cfg,"expected_model");
+    if((action=="start"||!expected_model.empty())&&expected_model!="C12"&&expected_model!="O1D")_exit(3);
     const std::string control=str(cfg,"control");
     if(action=="control"&&control!="pause"&&control!="resume"&&control!="stop")_exit(3);
     const long long target_bed=cfg["target_c"].is_number_integer()?number(cfg["target_c"]):-1;
@@ -91,6 +93,7 @@ int main(){
         }
         if(!p.is_object())return;
         json safe=pick(p,{"command","sequence_id","gcode_state","subtask_name","stg_cur","mc_percent","layer_num","total_layer_num","mc_remaining_time","print_error","result","reason","err_code","bed_temper","bed_target_temper","nozzle_temper","nozzle_target_temper"});
+        for(auto key:{"nozzle_diameter","nozzle_type"})if(p.contains(key))safe[key]=p[key];
         safe["event"]="telemetry";
         if(!p["ams"].is_null()){
             json trays=json::array();
@@ -148,6 +151,14 @@ int main(){
     sym<int(*)(void*,BBL::OnMessageFn)>(lib,"bambu_network_set_on_message_fn")(agent,onmsg);
     int rc=sym<int(*)(void*)>(lib,"bambu_network_start")(agent);
     if(rc!=0){emit({{"event","error"},{"message","Plugin startup failed"},{"rc",rc}});_exit(4);}
+    if(!expected_model.empty()){
+        BBL::detectResult detected{};
+        rc=sym<int(*)(void*,std::string,std::string,BBL::detectResult&)>(lib,"bambu_network_bind_detect")(agent,ip,"secure",detected);
+        if(rc!=0||detected.dev_id!=serial||detected.model_id!=expected_model){
+            emit({{"event","error"},{"message","Printer identity or model does not match the sliced file"}});_exit(5);
+        }
+        emit({{"event","printer_identity"},{"model_id",detected.model_id}});
+    }
     rc=sym<int(*)(void*,std::string,std::string,std::string,std::string,bool)>(lib,"bambu_network_connect_printer")(agent,serial,ip,"bblp",str(cfg,"access_code"),true);
     if(rc!=0)_exit(4);
     for(int i=0;i<150&&!connected;i++)std::this_thread::sleep_for(std::chrono::milliseconds(100));

@@ -18,7 +18,7 @@ python3 bambu.py inspect part.gcode.3mf
 python3 bambu.py check part.gcode.3mf --tray 1
 ```
 
-`printers` discovers saved identities in Studio's two access-code maps. It reveals serials, not code values. It does not scan the network or infer an address. `inspect` is offline; `check` compares the slice with a fresh idle state, AMS material and nozzle diameter. Both retain the original H2D/right-0.4-mm/single-filament slice restrictions.
+`printers` discovers saved identities in Studio's two access-code maps. It reveals serials, not code values. It does not scan the network or infer an address. `inspect` is offline; `check` verifies the live printer's identity/model and compares the slice with a fresh idle state, AMS material and nozzle diameter. Supported slices target H2D (right nozzle) or P1S, use a 0.4 mm nozzle, and contain one used filament with slice ID 1. Unused project filament presets are allowed on P1S when mapped to its single extruder.
 
 `status` works while printing and needs no local file. Human output includes the job, progress, layer, remaining time, bed temperature, AMS trays and nozzle configuration. JSON also retains the printer's reported generic nozzle-temperature fields without assuming which side they represent.
 
@@ -81,7 +81,7 @@ Pause requires `RUNNING`; resume requires `PAUSE` and a reported zero print-erro
 
 Each control is sent once. Confirmation requires both a matching command/sequence acknowledgment and post-dispatch telemetry: `PAUSE`, `RUNNING`, or `IDLE`/`FAILED` respectively. A naturally completed `FINISH` is not reported as a successful cancel. Missing evidence returns an uncertain result; inspect status before deciding whether to try again. The CLI never retries a control automatically.
 
-**Validation limit:** pause/resume/cancel have been exercised through the compiled helper using an offline fake networking plugin. Physical control transitions have not yet been tested on an active print.
+Pause/resume/cancel pass the compiled fake-plugin tests on both platforms and have been verified on a physical P1S through Linux Docker, including resumed layer progress and independent confirmation after cancellation. See [validation scope](validation.md) for versions and remaining limits.
 
 The wire command shapes follow [Bambu Studio v02.08.02.61's task-control implementation](https://github.com/bambulab/BambuStudio/blob/v02.08.02.61/src/slic3r/GUI/DeviceManager.cpp#L1418-L1460): `pause`, `resume`, and `stop`, with an empty `param` and a sequence ID.
 

@@ -22,11 +22,13 @@ class NativeBridgeTests(unittest.TestCase):
         subprocess.run((['g++','-std=c++17','-shared','-fPIC'] if core.IS_LINUX else ['clang++','-std=c++17','-dynamiclib'])+['-I',str(core.HERE),
                         str(core.HERE/'tests/fake_network_plugin.cpp'),'-o',str(cls.plugin)],
                        check=True,capture_output=True)
-    def run_bridge(self,scenario,control='pause',action='control'):
+    def run_bridge(self,scenario,control='pause',action='control',model=None):
         command='project_file' if action=='start' else control
         cfg={'action':action,'control':control,'job_name':'fixture.gcode','sequence_id':'42',
              'scratch':scenario,'plugin':str(self.plugin),'serial':'TEST_PRINTER',
              'payload':json.dumps({'print':{'command':command,'sequence_id':'42','param':'','subtask_name':'fixture.gcode'}})}
+        if model is not None or action=='start':
+            cfg['expected_model']=model or 'O1D'
         result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
         return result.returncode,[json.loads(line) for line in result.stdout.splitlines()]
     def test_pause_resume_and_cancel_confirmation(self):
@@ -70,6 +72,15 @@ class NativeBridgeTests(unittest.TestCase):
         rc,events=self.run_bridge('pause','gcode_line')
         self.assertEqual(rc,3)
         self.assertEqual(events,[])
+    def test_model_detection_matches_the_configured_printer_before_dispatch(self):
+        for scenario in ('start','wrong-serial','detection-failed'):
+            with self.subTest(scenario=scenario):
+                rc,events=self.run_bridge(scenario,action='start',model='C12' if scenario=='start' else 'O1D')
+                self.assertEqual(rc,5)
+                self.assertFalse(any(e.get('event')=='dispatching' for e in events))
+        rc,events=self.run_bridge('p1s',action='status',model='C12')
+        self.assertEqual(rc,0)
+        self.assertIn({'event':'printer_identity','model_id':'C12'},events)
     def test_bed_temp_confirms_target_and_rejects_arbitrary_gcode(self):
         cfg={'action':'bed_temp','target_c':55,'job_name':'','sequence_id':'42',
              'scratch':'bed_temp','plugin':str(self.plugin),'serial':'TEST_PRINTER',

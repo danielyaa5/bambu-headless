@@ -130,10 +130,23 @@ The existing job/state checks, certificate-readiness guard, per-printer lock,
 receipts, and acknowledgment plus telemetry confirmation remain in effect. An
 unconfirmed command is not automatically retried.
 
-**P1S print submission is not supported.** The existing slice validator still
-accepts only the documented H2D single-filament/right-0.4-mm-nozzle configuration.
-The `inspect`, `check`, `upload`, and `print` commands reject P1S slices. The P1S
-pause validation concerns an already-running print started through Studio.
+P1S submission accepts single-filament slices (used filament ID 1) for a 0.4 mm
+nozzle and AMS feeding. The archive checksum, selected plate, printer model,
+single-extruder mapping, live nozzle diameter, and selected AMS material are
+checked. The plugin verifies the configured printer identity and model before
+upload and again before dispatch. P1S payloads omit the H2D nozzle mapping and
+calibration fields. The original H2D right-nozzle restrictions remain in effect.
+
+```sh
+./bambu inspect /files/example.gcode.3mf
+./bambu check /files/example.gcode.3mf --tray 1
+# After checking that the plate is clear and the intended material is loaded:
+./bambu print /files/example.gcode.3mf --tray 1
+```
+
+External spools, multiple used filaments, and other nozzle sizes are not supported.
+The P1S model identifier (`C12`) and serial family (`01P`) come from
+[Studio's pinned printer definition](https://github.com/bambulab/BambuStudio/blob/v02.08.02.61/resources/printers/C12.json).
 
 ## Validation
 
@@ -142,17 +155,33 @@ Validated on a Debian x86-64 Docker host using an Ubuntu 24.04 container, Studio
 
 - Fresh printer status and AMS/temperature telemetry.
 - Certificate-validated FTPS storage listing.
-- One physical pause through the normal Docker CLI: matching job transitioned
-  from RUNNING to PAUSE, command confirmation succeeded, and an independent
-  status check also reported PAUSE with print_error 0.
+- Fresh file upload with complete read-back size/checksum verification.
+- CLI download, rename with checksum verification, and deletion of task-owned
+  probe files. Original printer files were not renamed or deleted.
+- P1S slice validation, live model/nozzle/AMS preflight, and signed print
+  submission: the printer acknowledged `project_file` and the matching job
+  entered PREPARE, then RUNNING and advanced through printed layers.
+- Bed-target commands at 35°C and back to 0°C, each confirmed by telemetry.
+- Physical pause, resume, and cancel through the normal Docker CLI. Each received
+  matching acknowledgment/state confirmation; layers advanced after resume.
+  An independent post-cancel query confirmed a stopped job and both heater
+  targets at 0°C.
 
-Physical resume/cancel, heater changes, Linux print submission, and long-running
-automation reliability remain unverified. The wrapper's read-only `--sign-probe`
+The test print was deliberately canceled; natural completion and long-running
+automation reliability remain unverified.
+The wrapper's read-only `--sign-probe`
 is not evidence that print controls are authorized.
 
 The container sets `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`; the Linux
 plugin otherwise encountered HTTPS peer-verification failures in this environment.
 Studio's printer certificates and TLS verification remain intact.
+
+The tested P1S accepted an upload but did not complete the data socket's TLS
+shutdown handshake, causing Python's default upload to time out after sending all
+bytes. For the P1S serial family, uploads close the encrypted data socket and then
+require the FTP completion reply and a full read-back comparison. Certificate
+verification and encrypted transfer remain enabled; other printer families keep
+the standard TLS shutdown behavior.
 
 Run offline tests without production mounts or network access:
 

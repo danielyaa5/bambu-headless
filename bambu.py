@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Headless H2D status, files, printing and guarded job controls."""
+"""Headless H2D/P1S status, files, printing and guarded job controls."""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +52,7 @@ def snapshot(status: dict) -> dict:
              'mc_remaining_time': 'remaining_minutes', 'print_error': 'print_error',
              'bed_temper': 'bed_c', 'bed_target_temper': 'bed_target_c',
              'nozzle_temper': 'reported_nozzle_c', 'nozzle_target_temper': 'reported_nozzle_target_c',
-             'trays': 'ams_trays', 'nozzles': 'nozzles'}
+             'trays': 'ams_trays', 'nozzles': 'nozzles', 'nozzle_diameter': 'nozzle_diameter', 'nozzle_type': 'nozzle_type'}
     return {out: status[key] for key, out in names.items() if key in status}
 
 

@@ -23,6 +23,11 @@ int bambu_network_set_on_printer_connected_fn(void *, BBL::OnPrinterConnectedFn)
 int bambu_network_set_on_local_message_fn(void *, BBL::OnMessageFn fn) { message=fn; return 0; }
 int bambu_network_set_on_message_fn(void *, BBL::OnMessageFn) { return 0; }
 int bambu_network_start(void *) { return 0; }
+int bambu_network_bind_detect(void *, std::string, std::string, BBL::detectResult &result) {
+    result.dev_id=scenario=="wrong-serial"?"OTHER_PRINTER":"TEST_PRINTER";
+    result.model_id=scenario=="p1s"?"C12":"O1D";
+    return scenario=="detection-failed"?-1:0;
+}
 int bambu_network_connect_printer(void *, std::string, std::string, std::string, std::string, bool) {
     connected(0,"",""); return 0;
 }

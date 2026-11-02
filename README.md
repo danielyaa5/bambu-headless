@@ -1,8 +1,8 @@
 # bambu-headless
 
-Manage files, follow jobs and start a sliced print on a Bambu Lab H2D from a macOS terminal, with **Cloud/Handy still enabled** and **Developer Mode off**. Bambu Studio does not need to be running.
+Manage files, follow jobs and start a single-filament sliced print on a Bambu Lab H2D or P1S from a terminal, with **Cloud/Handy still enabled** and **Developer Mode off**. Bambu Studio does not need to be running.
 
-Experimental Linux x86-64 support is also available through [Docker Compose](docs/linux-docker.md). P1S status, storage listing and a physical pause have been verified; starting prints retains the H2D-only restrictions below.
+Experimental Linux x86-64 support is available through [Docker Compose](docs/linux-docker.md). Both platforms use the same C++ bridge. Slice submission supports a 0.4 mm nozzle, one filament (slice filament ID 1), and AMS feeding; H2D slices must use the right nozzle.
 
 This is an experimental open-source wrapper around **Bambu's installed proprietary networking plugin**. It is not an official Bambu CLI or an independent replacement for that plugin. A small process-local shim changes the executable-path lookup used by the plugin's signed-host check. See [how it works](docs/how-it-works.md) before using it.
 
@@ -17,7 +17,7 @@ This is an experimental open-source wrapper around **Bambu's installed proprieta
 | Account | Existing signed-in Studio configuration, US region |
 | Result | Matching job reached `PREPARE`; independent logger observed `RUNNING`, later `FINISH` at 100% |
 
-The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Other configurations, Intel Macs, regions, external spools, dual-material prints and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. Pause/resume/cancel are tested with an offline plugin fixture; a physical pause has additionally been confirmed on P1S using Linux. Physical resume/cancel remain unverified.
+The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Linux/P1S validation includes print submission, layer progress, pause, resume, cancel, and bed-target control. Other configurations, Intel Macs, regions, external spools, dual-material prints and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. The P1S test was deliberately canceled after verifying resume; natural completion was not tested.
 
 ## Requirements
 
@@ -72,14 +72,14 @@ After checking that the plate is clear and the intended material is loaded:
 python3 bambu.py print part.gcode.3mf --host printer.example
 ```
 
-Defaults: plate 1, right 0.4 mm nozzle, AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, etc. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
+Defaults: plate 1, 0.4 mm nozzle (right on H2D), AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, etc. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
 
 `--json` gives machine-readable output; `watch` emits one JSON object per line. `--report reports/result.json` saves the latest result. Reports exclude access codes and tokens, but may contain job names, file paths, materials, and (for `printers`) saved printer serials. Review them before sharing.
 
 ## Start guards and retry behavior
 
 - Verifies the archive and embedded G-code checksum, selected plate, printer model and supported nozzle/filament mapping.
-- Reads fresh telemetry; refuses busy, paused or unknown states and mismatched AMS material or nozzle diameter. It cannot verify the physical plate or spool contents.
+- Verifies the printer's model and identity through the official plugin before upload and again before dispatch. Reads fresh telemetry; refuses busy, paused or unknown states and mismatched AMS material or nozzle diameter. It cannot verify the physical plate or spool contents.
 - Uploads over certificate-validated implicit FTPS and downloads the full file to compare size and MD5. An existing identical file is reused.
 - Uses a per-printer local lock and saves a receipt **before** dispatch. A timeout is an uncertain outcome, not permission to retry.
 - Reports success only when telemetry identifies the requested job in `PREPARE` or `RUNNING`. A publish acknowledgment alone is insufficient.
