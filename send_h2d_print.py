@@ -95,18 +95,20 @@ def inspect_file(path: Path, plate: int = 1) -> dict:
 
 def ensure_bridge() -> Path:
     binary = HERE / 'h2d_network_bridge'
-    source = HERE / ('h2d_network_bridge.cpp' if IS_LINUX else 'h2d_network_bridge.mm')
+    source = HERE / 'h2d_network_bridge.cpp'
     header = HERE / 'vendor/bambu_networking.hpp'
     if not header.exists():
         raise SendError('Pinned public ABI header is missing.')
     if not binary.exists() or binary.stat().st_mtime < max(source.stat().st_mtime, header.stat().st_mtime):
-        command = (['g++', '-std=c++17', '-O2', str(source), '-o', str(binary), '-ldl', '-pthread']
-                   if IS_LINUX else ['clang++', '-std=c++17', '-O2', '-framework', 'Foundation',
-                                     '-framework', 'Security', str(source), '-o', str(binary)])
+        command = ['g++' if IS_LINUX else 'clang++', '-std=c++17', '-O2',
+                   str(source), '-o', str(binary), '-pthread']
+        command += ['-ldl'] if IS_LINUX else ['-I', '/opt/homebrew/include', '-I', '/usr/local/include']
         result = subprocess.run(command,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
         if result.returncode:
-            raise SendError('Could not compile the native adapter; install the platform compiler and JSON development headers.')
+            raise SendError('Could not compile the native adapter; install the platform compiler and '
+                            'nlohmann-json headers (macOS: brew install nlohmann-json; '
+                            'Debian/Ubuntu: apt install nlohmann-json3-dev).')
     shim_source = HERE / ('h2d_host_identity_linux.c' if IS_LINUX else 'h2d_host_identity.c')
     shim = HERE / ('h2d_host_identity.so' if IS_LINUX else 'h2d_host_identity.dylib')
     if not shim.exists() or shim.stat().st_mtime < shim_source.stat().st_mtime:

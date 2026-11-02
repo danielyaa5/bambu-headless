@@ -1,11 +1,10 @@
 # Linux Docker setup
 
-The Linux adapter uses Bambu's unmodified networking plugin through the same
-pinned public ABI as the macOS adapter. It replaces Foundation JSON handling with
-C++/nlohmann-json and uses a process-local `readlink` shim for `/proc/self/exe`.
+Both platforms use one C++/nlohmann-json adapter for Bambu's unmodified networking
+plugin through the pinned public ABI. The Linux executable-path shim substitutes
+`readlink("/proc/self/exe")`; the macOS shim interposes `_NSGetExecutablePath`.
 Other links pass through unchanged. Signing and certificate exchange remain in
 the official plugin; no signing keys are extracted or vendor binaries patched.
-The macOS native adapter and shim are unchanged.
 
 ## Requirements
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Linux headless adapter for Bambu Studio's unmodified networking plugin.
+// Shared macOS/Linux adapter for Bambu Studio's unmodified networking plugin.
 // The public ABI is pinned to Studio v02.08.02.61 / plugin 02.08.02.x.
 // No GUI or app-binary modification. The launcher loads a process-local
 // executable-path shim into this helper, not into Bambu Studio.
@@ -45,7 +45,7 @@ static long long number(const json &v) {
     if(v.is_string()){try{return std::stoll(v.get<std::string>());}catch(...) {}}
     return 0;
 }
-int main(){{
+int main(){
     // Suppress all vendor logging before loading the plugin. Only explicit,
     // allowlisted JSON events use the saved output descriptor.
     result_fd=dup(STDOUT_FILENO);
@@ -81,7 +81,7 @@ int main(){{
     const std::string expected=str(cfg,"job_name"),sequence=str(cfg,"sequence_id");
     BBL::OnLocalConnectedFn conn=[&](int status,std::string,std::string){if(status==0)connected=true;};
     BBL::OnPrinterConnectedFn pc=[&](std::string){connected=true;};
-    BBL::OnMessageFn onmsg=[&](std::string,std::string message){{
+    BBL::OnMessageFn onmsg=[&](std::string,std::string message){
         if(message=="device_cert_installed"){cert_ready=true;emit({{"event","device_certificate_ready"}});return;}
         json root=parse(message),p=root["print"];
         json security=root["security"];
@@ -141,7 +141,7 @@ int main(){{
             else if(result=="SUCCESS"||result=="success")bed_ack=true;
         }
         emit(safe);
-    }};
+    };
     sym<int(*)(void*,BBL::OnLocalConnectedFn)>(lib,"bambu_network_set_on_local_connect_fn")(agent,conn);
     sym<int(*)(void*,BBL::OnPrinterConnectedFn)>(lib,"bambu_network_set_on_printer_connected_fn")(agent,pc);
     sym<int(*)(void*,BBL::OnMessageFn)>(lib,"bambu_network_set_on_local_message_fn")(agent,onmsg);
@@ -234,4 +234,4 @@ int main(){{
     // Vendor worker teardown may block. Disconnect first; process exit closes
     // remaining sockets and destroys all in-memory credentials deterministically.
     _exit(confirmed&&!rejected?0:7);
-}}
+}

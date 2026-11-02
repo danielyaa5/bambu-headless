@@ -54,6 +54,18 @@ class NativeBridgeTests(unittest.TestCase):
         rc,events=self.run_bridge('start',action='start')
         self.assertEqual(rc,0)
         self.assertTrue(events[-1]['confirmed'])
+    def test_status_preserves_nested_telemetry_and_filters_unlisted_fields(self):
+        rc,events=self.run_bridge('status-details',action='status')
+        self.assertEqual(rc,0)
+        telemetry=next(e for e in events if e.get('event')=='telemetry')
+        self.assertEqual(telemetry['gcode_state'],'RUNNING')
+        self.assertEqual(telemetry['bed_temper'],60.5)
+        self.assertEqual(telemetry['nozzle_temper'],215.25)
+        self.assertEqual(telemetry['trays'],[{'ams_id':'0','id':'1','tray_type':'PLA',
+                                            'tray_color':'FFFFFFFF','tray_info_idx':'GFA00'}])
+        self.assertEqual(telemetry['nozzles'],[{'id':0,'diameter':0.4,'type':'hardened_steel'}])
+        self.assertNotIn('private_field',telemetry)
+        self.assertEqual(events[-1]['event'],'status_complete')
     def test_arbitrary_control_commands_rejected_before_plugin_load(self):
         rc,events=self.run_bridge('pause','gcode_line')
         self.assertEqual(rc,3)

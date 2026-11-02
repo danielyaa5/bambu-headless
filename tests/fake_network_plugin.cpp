@@ -35,6 +35,17 @@ void bambu_network_install_device_cert(void *, std::string, bool) {
 }
 int bambu_network_send_message_to_printer(void *, std::string, std::string payload, int, int) {
     if(payload.find("pushall")!=std::string::npos) {
+        if(scenario=="status-details") {
+            message("TEST_PRINTER", R"({"print":{
+                "command":"push_status","gcode_state":"RUNNING","subtask_name":"fixture.gcode",
+                "print_error":0,"bed_temper":60.5,"nozzle_temper":215.25,
+                "ams":{"ams":[{"id":"0","tray":[{"id":"1","tray_type":"PLA",
+                    "tray_color":"FFFFFFFF","tray_info_idx":"GFA00","private_field":"omit"}]}]},
+                "device":{"nozzle":{"info":[{"id":0,"diameter":0.4,"type":"hardened_steel"}]}},
+                "private_field":"omit"
+            }})");
+            return 0;
+        }
         if(scenario=="start"||scenario=="bed_temp")status("FINISH","old.gcode");
         else if(scenario=="resume")status("PAUSE");
         else if(scenario=="resume-error")status("PAUSE","fixture.gcode",123);

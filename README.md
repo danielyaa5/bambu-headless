@@ -25,6 +25,7 @@ These are the macOS requirements; see the [Linux setup guide](docs/linux-docker.
 
 - Python 3.10 or newer. No third-party Python packages.
 - Xcode Command Line Tools (`clang` and `clang++`). Install with `xcode-select --install` if needed.
+- nlohmann-json C++ headers: `brew install nlohmann-json`. The compiler searches the standard Apple silicon and Intel Homebrew include directories; for another installation, set `CPLUS_INCLUDE_PATH` to its include directory.
 - Bambu Studio at `/Applications/BambuStudio.app`, its networking plugin installed, and a saved printer access code and signed-in session in your own Studio configuration.
 - LAN access to the printer on ports 990 and 8883. The plugin also needs internet access for certificate refresh; this is not a fully offline workflow.
 - An already sliced `.gcode.3mf` for inspect/check/upload/print commands. Status, monitoring and file management do not require a local print file. This tool does not slice models.
@@ -96,7 +97,7 @@ python3 -c 'import send_h2d_print as s; s.ensure_bridge()'
 
 Tests use synthetic files and mocked connections; they do not contact a printer. The native compile check does not load the plugin. [Validation notes](docs/validation.md) distinguish these checks from the earlier physical-printer run.
 
-Source files: [expanded CLI](bambu.py), [file operations](bambu_files.py), [original sender](send_h2d_print.py), [native adapter](h2d_network_bridge.mm), [executable-path shim](h2d_host_identity.c). Tests include [CLI and transfer behavior](test_cli.py), [native control behavior](test_native_bridge.py) and [original sender guards](test_send_h2d_print.py).
+Source files: [expanded CLI](bambu.py), [file operations](bambu_files.py), [original sender](send_h2d_print.py), [shared native adapter](h2d_network_bridge.cpp), [macOS executable-path shim](h2d_host_identity.c), [Linux executable-path shim](h2d_host_identity_linux.c). Tests include [CLI and transfer behavior](test_cli.py), [native control behavior](test_native_bridge.py) and [original sender guards](test_send_h2d_print.py).
 
 ## License and credits
 
