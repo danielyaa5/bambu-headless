@@ -11,7 +11,7 @@ import unittest
 import send_h2d_print as core
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and shutil.which('clang++'), 'macOS native test needs clang++')
+@unittest.skipUnless((core.IS_LINUX and shutil.which('g++')) or (sys.platform == 'darwin' and shutil.which('clang++')), 'Native test needs a C++ compiler')
 class NativeBridgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -19,7 +19,7 @@ class NativeBridgeTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.plugin=Path(cls.temp.name)/'fake.dylib'
         cls.binary=core.ensure_bridge()
-        subprocess.run(['clang++','-std=c++17','-dynamiclib','-I',str(core.HERE),
+        subprocess.run((['g++','-std=c++17','-shared','-fPIC'] if core.IS_LINUX else ['clang++','-std=c++17','-dynamiclib'])+['-I',str(core.HERE),
                         str(core.HERE/'tests/fake_network_plugin.cpp'),'-o',str(cls.plugin)],
                        check=True,capture_output=True)
     def run_bridge(self,scenario,control='pause',action='control'):

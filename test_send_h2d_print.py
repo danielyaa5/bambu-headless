@@ -20,6 +20,10 @@ class SenderSafetyTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'fixture.gcode.3mf'
+        self.cache = Path(self.temp.name) / ('.cache/h2d-headless' if sender.IS_LINUX else 'Library/Caches/h2d-headless')
+        patcher = mock.patch.dict(sender.os.environ, {'XDG_CACHE_HOME': str(Path(self.temp.name) / '.cache')})
+        patcher.start()
+        self.addCleanup(patcher.stop)
     def fixture(self, mapping='2', checksum=None, material='PLA'):
         gcode = b'; validation fixture only\n'
         with zipfile.ZipFile(self.path, 'w') as z:
@@ -93,7 +97,7 @@ class SenderSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(sender.SendError, 'Start was not confirmed'):
             self.run_cli('--start')
         self.last_upload.assert_called_once()
-        receipts = list((Path(self.temp.name)/'Library/Caches/h2d-headless').glob('*.json'))
+        receipts = list(self.cache.glob('*.json'))
         self.assertEqual(len(receipts), 1)
         self.assertTrue(json.loads(receipts[0].read_text())['submission_attempted'])
         with self.assertRaisesRegex(sender.SendError, 'submission receipt'):
@@ -110,7 +114,7 @@ class SenderSafetyTests(unittest.TestCase):
                     self.run_cli('--start', '--repeat', '--report', str(report), *flags)
                 job = self.last_bridge.call_args_list[-1].args[2]
                 self.assertIs(json.loads(job['payload'])['print']['timelapse'], expected)
-                receipt = next((Path(self.temp.name)/'Library/Caches/h2d-headless').glob('*.json'))
+                receipt = next(self.cache.glob('*.json'))
                 self.assertIs(json.loads(receipt.read_text())['timelapse'], expected)
                 self.assertIs(json.loads(report.read_text())['timelapse'], expected)
 

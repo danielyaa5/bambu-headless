@@ -2,6 +2,8 @@
 
 Manage files, follow jobs and start a sliced print on a Bambu Lab H2D from a macOS terminal, with **Cloud/Handy still enabled** and **Developer Mode off**. Bambu Studio does not need to be running.
 
+Experimental Linux x86-64 support is also available through [Docker Compose](docs/linux-docker.md). P1S status, storage listing and a physical pause have been verified; starting prints retains the H2D-only restrictions below.
+
 This is an experimental open-source wrapper around **Bambu's installed proprietary networking plugin**. It is not an official Bambu CLI or an independent replacement for that plugin. A small process-local shim changes the executable-path lookup used by the plugin's signed-host check. See [how it works](docs/how-it-works.md) before using it.
 
 ## Tested scope
@@ -15,9 +17,11 @@ This is an experimental open-source wrapper around **Bambu's installed proprieta
 | Account | Existing signed-in Studio configuration, US region |
 | Result | Matching job reached `PREPARE`; independent logger observed `RUNNING`, later `FINISH` at 100% |
 
-The helper rejects plugins outside the `02.08.02` version series; only the version above has been exercised on hardware. Other printers, Intel Macs, regions, external spools, dual-material prints and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. Pause/resume/cancel are tested with an offline plugin fixture, **not yet with a physical print**.
+The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Other configurations, Intel Macs, regions, external spools, dual-material prints and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. Pause/resume/cancel are tested with an offline plugin fixture; a physical pause has additionally been confirmed on P1S using Linux. Physical resume/cancel remain unverified.
 
 ## Requirements
+
+These are the macOS requirements; see the [Linux setup guide](docs/linux-docker.md) for Docker requirements and configuration.
 
 - Python 3.10 or newer. No third-party Python packages.
 - Xcode Command Line Tools (`clang` and `clang++`). Install with `xcode-select --install` if needed.
@@ -79,7 +83,7 @@ Defaults: plate 1, right 0.4 mm nozzle, AMS tray `1` (A2). Use `--tray 0` for A1
 - Uses a per-printer local lock and saves a receipt **before** dispatch. A timeout is an uncertain outcome, not permission to retry.
 - Reports success only when telemetry identifies the requested job in `PREPARE` or `RUNNING`. A publish acknowledgment alone is insufficient.
 
-Receipts live in `~/Library/Caches/h2d-headless/`. To intentionally print the same file again, inspect the printer and add `--repeat --start`. This does not override the busy-printer guard. The lock and receipts only coordinate copies running under the same local account; they cannot prevent another computer or Handy from submitting a job concurrently.
+Receipts live in `~/Library/Caches/h2d-headless/` on macOS, or `$XDG_CACHE_HOME/h2d-headless/` (default `~/.cache/h2d-headless/`) on Linux. Docker Compose persists them in `./cache/`. To intentionally print the same file again, inspect the printer and add `--repeat --start`. This does not override the busy-printer guard. The lock and receipts only coordinate copies running under the same local account; they cannot prevent another computer or Handy from submitting a job concurrently.
 
 `--sign-probe` is a read-only calibration request kept for diagnosis. Its success does **not** establish that the plugin will authorize a print command.
 

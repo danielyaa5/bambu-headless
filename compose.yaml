@@ -1,0 +1,18 @@
+services:
+  bambu:
+    build: .
+    image: bambu-headless:linux-local
+    user: "${BAMBU_UID:-1000}:${BAMBU_GID:-1000}"
+    network_mode: host
+    environment:
+      BAMBU_HOST: ${BAMBU_HOST:-}
+      BAMBU_SERIAL: ${BAMBU_SERIAL:-}
+    volumes:
+      - ./config:/config
+      - ./cache:/cache
+      - ./files:/files
+      - ./vendor-linux/squashfs-root:/opt/bambu-studio:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

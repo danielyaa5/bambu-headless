@@ -1,0 +1,17 @@
+.git
+__pycache__
+h2d_network_bridge
+*.dylib
+*.so
+config
+cache
+files
+vendor-linux
+.env
+
+.env.*
+*.log
+._*
+reports
+diagnostics
+docs/p1s-certificate-report.md

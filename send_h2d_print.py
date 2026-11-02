@@ -31,7 +31,12 @@ import zipfile
 
 HERE = Path(__file__).resolve().parent
 STUDIO = Path('/Applications/BambuStudio.app')
-CONFIG = Path.home() / 'Library/Application Support/BambuStudio'
+IS_LINUX = sys.platform.startswith('linux')
+CONFIG = Path(os.environ.get('BAMBU_CONFIG_DIR', str(
+    Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'BambuStudio'
+    if IS_LINUX else Path.home() / 'Library/Application Support/BambuStudio')))
+CERT_DIR = Path(os.environ.get('BAMBU_CERT_DIR', '/opt/bambu-studio/resources/cert')) if IS_LINUX else STUDIO / 'Contents/Resources/cert'
+STUDIO_EXECUTABLE = os.environ.get('BAMBU_STUDIO_EXECUTABLE', '/opt/bambu-studio/bin/bambu-studio') if IS_LINUX else str(STUDIO / 'Contents/MacOS/BambuStudio')
 IDLE_STATES = {'IDLE', 'FINISH', 'FAILED'}
 
 class SendError(Exception):
@@ -90,20 +95,24 @@ def inspect_file(path: Path, plate: int = 1) -> dict:
 
 def ensure_bridge() -> Path:
     binary = HERE / 'h2d_network_bridge'
-    source = HERE / 'h2d_network_bridge.mm'
+    source = HERE / ('h2d_network_bridge.cpp' if IS_LINUX else 'h2d_network_bridge.mm')
     header = HERE / 'vendor/bambu_networking.hpp'
     if not header.exists():
         raise SendError('Pinned public ABI header is missing.')
     if not binary.exists() or binary.stat().st_mtime < max(source.stat().st_mtime, header.stat().st_mtime):
-        result = subprocess.run(['clang++', '-std=c++17', '-O2', '-framework', 'Foundation',
-                                 '-framework', 'Security', str(source), '-o', str(binary)],
+        command = (['g++', '-std=c++17', '-O2', str(source), '-o', str(binary), '-ldl', '-pthread']
+                   if IS_LINUX else ['clang++', '-std=c++17', '-O2', '-framework', 'Foundation',
+                                     '-framework', 'Security', str(source), '-o', str(binary)])
+        result = subprocess.run(command,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
         if result.returncode:
-            raise SendError('Could not compile the native adapter; install Xcode Command Line Tools.')
-    shim_source = HERE / 'h2d_host_identity.c'
-    shim = HERE / 'h2d_host_identity.dylib'
+            raise SendError('Could not compile the native adapter; install the platform compiler and JSON development headers.')
+    shim_source = HERE / ('h2d_host_identity_linux.c' if IS_LINUX else 'h2d_host_identity.c')
+    shim = HERE / ('h2d_host_identity.so' if IS_LINUX else 'h2d_host_identity.dylib')
     if not shim.exists() or shim.stat().st_mtime < shim_source.stat().st_mtime:
-        result = subprocess.run(['clang', '-dynamiclib', str(shim_source), '-o', str(shim)],
+        command = (['gcc', '-shared', '-fPIC', str(shim_source), '-o', str(shim), '-ldl']
+                   if IS_LINUX else ['clang', '-dynamiclib', str(shim_source), '-o', str(shim)])
+        result = subprocess.run(command,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
         if result.returncode:
             raise SendError('Could not compile the process-local compatibility shim.')
@@ -126,8 +135,8 @@ def load_connection(host: str, serial: str | None) -> dict:
         if region not in ('North America', 'US', 'United States', ''):
             raise SendError('This sender is validated for the US cloud region only.')
         return dict(serial=serial, ip=host, access_code=code, country='US',
-                    plugin=str(CONFIG / 'plugins/libbambu_networking.dylib'),
-                    config_dir=str(CONFIG), cert_dir=str(STUDIO / 'Contents/Resources/cert'))
+                    plugin=str(CONFIG / ('plugins/libbambu_networking.so' if IS_LINUX else 'plugins/libbambu_networking.dylib')),
+                    config_dir=str(CONFIG), cert_dir=str(CERT_DIR))
     except (OSError, ValueError):
         raise SendError('Cannot read the saved Bambu Studio connection configuration.') from None
 
@@ -144,7 +153,8 @@ def saved_printers() -> list[dict]:
 
 @contextlib.contextmanager
 def printer_lock(connection: dict):
-    cache = Path.home() / 'Library/Caches/h2d-headless'
+    cache = (Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'h2d-headless'
+             if IS_LINUX else Path.home() / 'Library/Caches/h2d-headless')
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     key = hashlib.sha256(connection['serial'].encode()).hexdigest()[:20]
     with (cache / (key + '.lock')).open('a') as lock:
@@ -161,9 +171,10 @@ def bridge_run(connection: dict, action: str, job: dict | None = None) -> tuple[
         if job:
             config.update(job)
         config.setdefault('sequence_id', str(20000 + time.time_ns() % 9998))
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('DYLD_', 'H2D_STUDIO_'))}
-        env['DYLD_INSERT_LIBRARIES'] = str(HERE / 'h2d_host_identity.dylib')
-        env['H2D_STUDIO_EXECUTABLE'] = str(STUDIO / 'Contents/MacOS/BambuStudio')
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('DYLD_', 'LD_PRELOAD', 'H2D_STUDIO_'))}
+        env['LD_PRELOAD' if IS_LINUX else 'DYLD_INSERT_LIBRARIES'] = str(
+            HERE / ('h2d_host_identity.so' if IS_LINUX else 'h2d_host_identity.dylib'))
+        env['H2D_STUDIO_EXECUTABLE'] = STUDIO_EXECUTABLE
         try:
             result = subprocess.run([str(binary)], input=json.dumps(config), text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=95, env=env)
@@ -213,7 +224,7 @@ def print_payload(info: dict, tray: int, sequence: str, timelapse: bool = True) 
 
 class ImplicitFTPS(ftplib.FTP_TLS):
     def __init__(self, host: str, serial: str):
-        context = ssl.create_default_context(cafile=str(STUDIO / 'Contents/Resources/cert/printer.cer'))
+        context = ssl.create_default_context(cafile=str(CERT_DIR / 'printer.cer'))
         super().__init__(context=context, timeout=20)
         self.host = serial  # Verify the printer certificate's serial-number CN.
         self.sock = context.wrap_socket(socket.create_connection((host, 990), timeout=20), server_hostname=serial)
