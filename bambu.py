@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Headless H2D status, files, printing and guarded job controls."""
+"""Headless H2D/P1S status, files, printing and guarded job controls."""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +52,7 @@ def snapshot(status: dict) -> dict:
              'mc_remaining_time': 'remaining_minutes', 'print_error': 'print_error',
              'bed_temper': 'bed_c', 'bed_target_temper': 'bed_target_c',
              'nozzle_temper': 'reported_nozzle_c', 'nozzle_target_temper': 'reported_nozzle_target_c',
-             'trays': 'ams_trays', 'nozzles': 'nozzles'}
+             'trays': 'ams_trays', 'nozzles': 'nozzles', 'nozzle_diameter': 'nozzle_diameter', 'nozzle_type': 'nozzle_type'}
     return {out: status[key] for key, out in names.items() if key in status}
 
 
@@ -253,7 +253,7 @@ def build_parser():
     def options(p, connection=True):
         if connection:
             p.add_argument('--host', default=os.environ.get('BAMBU_HOST'), help='LAN address (or BAMBU_HOST)')
-            p.add_argument('--serial', default=os.environ.get('BAMBU_SERIAL'), help='Saved printer serial (or BAMBU_SERIAL)')
+            p.add_argument('--serial', default=os.environ.get('BAMBU_SERIAL') or None, help='Saved printer serial (or BAMBU_SERIAL)')
         p.add_argument('--json', action='store_true', help='Machine-readable JSON; watch emits JSON Lines')
         p.add_argument('--report', type=Path, help='Save the latest result as a private JSON file')
 

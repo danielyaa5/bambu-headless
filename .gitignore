@@ -9,3 +9,9 @@ __pycache__/
 /reports/
 .env
 .env.*
+
+/h2d_host_identity.so
+/config/
+/cache/
+/files/
+/vendor-linux/

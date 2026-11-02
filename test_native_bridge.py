@@ -11,7 +11,7 @@ import unittest
 import send_h2d_print as core
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and shutil.which('clang++'), 'macOS native test needs clang++')
+@unittest.skipUnless((core.IS_LINUX and shutil.which('g++')) or (sys.platform == 'darwin' and shutil.which('clang++')), 'Native test needs a C++ compiler')
 class NativeBridgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -19,14 +19,16 @@ class NativeBridgeTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.plugin=Path(cls.temp.name)/'fake.dylib'
         cls.binary=core.ensure_bridge()
-        subprocess.run(['clang++','-std=c++17','-dynamiclib','-I',str(core.HERE),
+        subprocess.run((['g++','-std=c++17','-shared','-fPIC'] if core.IS_LINUX else ['clang++','-std=c++17','-dynamiclib'])+['-I',str(core.HERE),
                         str(core.HERE/'tests/fake_network_plugin.cpp'),'-o',str(cls.plugin)],
                        check=True,capture_output=True)
-    def run_bridge(self,scenario,control='pause',action='control'):
+    def run_bridge(self,scenario,control='pause',action='control',model=None):
         command='project_file' if action=='start' else control
         cfg={'action':action,'control':control,'job_name':'fixture.gcode','sequence_id':'42',
              'scratch':scenario,'plugin':str(self.plugin),'serial':'TEST_PRINTER',
              'payload':json.dumps({'print':{'command':command,'sequence_id':'42','param':'','subtask_name':'fixture.gcode'}})}
+        if model is not None or action=='start':
+            cfg['expected_model']=model or 'O1D'
         result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
         return result.returncode,[json.loads(line) for line in result.stdout.splitlines()]
     def test_pause_resume_and_cancel_confirmation(self):
@@ -54,10 +56,31 @@ class NativeBridgeTests(unittest.TestCase):
         rc,events=self.run_bridge('start',action='start')
         self.assertEqual(rc,0)
         self.assertTrue(events[-1]['confirmed'])
+    def test_status_preserves_nested_telemetry_and_filters_unlisted_fields(self):
+        rc,events=self.run_bridge('status-details',action='status')
+        self.assertEqual(rc,0)
+        telemetry=next(e for e in events if e.get('event')=='telemetry')
+        self.assertEqual(telemetry['gcode_state'],'RUNNING')
+        self.assertEqual(telemetry['bed_temper'],60.5)
+        self.assertEqual(telemetry['nozzle_temper'],215.25)
+        self.assertEqual(telemetry['trays'],[{'ams_id':'0','id':'1','tray_type':'PLA',
+                                            'tray_color':'FFFFFFFF','tray_info_idx':'GFA00'}])
+        self.assertEqual(telemetry['nozzles'],[{'id':0,'diameter':0.4,'type':'hardened_steel'}])
+        self.assertNotIn('private_field',telemetry)
+        self.assertEqual(events[-1]['event'],'status_complete')
     def test_arbitrary_control_commands_rejected_before_plugin_load(self):
         rc,events=self.run_bridge('pause','gcode_line')
         self.assertEqual(rc,3)
         self.assertEqual(events,[])
+    def test_model_detection_matches_the_configured_printer_before_dispatch(self):
+        for scenario in ('start','wrong-serial','detection-failed'):
+            with self.subTest(scenario=scenario):
+                rc,events=self.run_bridge(scenario,action='start',model='C12' if scenario=='start' else 'O1D')
+                self.assertEqual(rc,5)
+                self.assertFalse(any(e.get('event')=='dispatching' for e in events))
+        rc,events=self.run_bridge('p1s',action='status',model='C12')
+        self.assertEqual(rc,0)
+        self.assertIn({'event':'printer_identity','model_id':'C12'},events)
     def test_bed_temp_confirms_target_and_rejects_arbitrary_gcode(self):
         cfg={'action':'bed_temp','target_c':55,'job_name':'','sequence_id':'42',
              'scratch':'bed_temp','plugin':str(self.plugin),'serial':'TEST_PRINTER',
