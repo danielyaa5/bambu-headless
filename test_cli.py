@@ -168,6 +168,14 @@ class CLITests(unittest.TestCase):
             for argv in [['cancel','--job','fixture','--host','printer.example'],['files','delete','/part.gcode.3mf','--host','printer.example']]:
                 with self.assertRaisesRegex(core.SendError,'--yes'): bambu.main(argv)
             load.assert_not_called()
+    def test_empty_compose_serial_selects_the_sole_saved_printer(self):
+        root=Path(self.temp.name)
+        (root/'BambuStudio.conf').write_text(json.dumps({'access_code':{'TEST_A':'TEST_CODE'}}))
+        with mock.patch.dict(bambu.os.environ,{'BAMBU_SERIAL':''}),mock.patch.object(core,'CONFIG',root), \
+             mock.patch.object(core,'printer_lock',return_value=nullcontext()), \
+             mock.patch.object(bambu,'live_status',return_value=self.status()) as live,redirect_stdout(io.StringIO()):
+            self.assertEqual(bambu.main(['status','--host','printer.example','--json']),0)
+            self.assertEqual(live.call_args.args[0]['serial'],'TEST_A')
     def test_storage_mutation_refuses_busy_printer(self):
         with mock.patch.object(core,'load_connection',return_value={}),mock.patch.object(core,'printer_lock',return_value=nullcontext()),mock.patch.object(bambu,'live_status',return_value=self.status()),mock.patch.object(files,'delete') as delete:
             with self.assertRaisesRegex(core.SendError,'busy'):

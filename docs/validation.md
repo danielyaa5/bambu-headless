@@ -25,7 +25,7 @@ The test slice uses one PETG filament, AMS A2, a 0.4 mm nozzle, and Textured PEI
   verified all bytes and the checksum without that timeout.
 - CLI download and rename preserved the test file's size and checksum; deletion
   was verified. Both temporary upload probes were removed from printer storage.
-- All 54 offline tests passed on Linux. On macOS, 53 passed and the Linux-only
+- All 55 offline tests passed on Linux. On macOS, 54 passed and the Linux-only
   shim test was skipped; the shared bridge also read live P1S status successfully.
 
 The October H2D print observations below used the original Objective-C++ bridge.

@@ -253,7 +253,7 @@ def build_parser():
     def options(p, connection=True):
         if connection:
             p.add_argument('--host', default=os.environ.get('BAMBU_HOST'), help='LAN address (or BAMBU_HOST)')
-            p.add_argument('--serial', default=os.environ.get('BAMBU_SERIAL'), help='Saved printer serial (or BAMBU_SERIAL)')
+            p.add_argument('--serial', default=os.environ.get('BAMBU_SERIAL') or None, help='Saved printer serial (or BAMBU_SERIAL)')
         p.add_argument('--json', action='store_true', help='Machine-readable JSON; watch emits JSON Lines')
         p.add_argument('--report', type=Path, help='Save the latest result as a private JSON file')
 
