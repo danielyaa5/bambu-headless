@@ -151,12 +151,6 @@ Physical resume/cancel, heater changes, Linux print submission, and long-running
 automation reliability remain unverified. The wrapper's read-only `--sign-probe`
 is not evidence that print controls are authorized.
 
-During validation, certificate exchange initially stalled on both Mac and Linux,
-while Studio and Handy also failed to control the printer. After the owner stopped
-the print locally and power-cycled the printer, readiness recovered and Docker
-pause succeeded on a new print. This does not establish the underlying cause or
-guarantee recovery from future failures. No timeout bypass is included in this port.
-
 The container sets `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`; the Linux
 plugin otherwise encountered HTTPS peer-verification failures in this environment.
 Studio's printer certificates and TLS verification remain intact.
