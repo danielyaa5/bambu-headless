@@ -37,10 +37,43 @@ class SenderSafetyTests(unittest.TestCase):
         return {'gcode_state':state,'model_id':'O1D','trays':[{'ams_id':'0','id':'1','tray_type':material}],'nozzles':[{'id':0,'diameter':diameter}]}
     def test_valid_right_nozzle_file_and_a2(self):
         sender.preflight(self.status(), self.fixture(), 1)
+    def test_valid_left_nozzle_file_and_b2(self):
+        info = self.fixture(mapping='1')
+        status = {'gcode_state':'FINISH','model_id':'O1D',
+                  'trays':[{'ams_id':'1','id':'1','tray_type':'PLA'}],
+                  'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        sender.preflight(status, info, 5)
+        payload = sender.print_payload(info, 5, '22000')['print']
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':1,'slot_id':1}])
+        self.assertEqual(payload['nozzle_mapping'], [1])
     def test_corrupted_embedded_gcode_rejected(self):
         with self.assertRaises(sender.SendError): self.fixture(checksum='0'*32)
-    def test_left_nozzle_rejected(self):
-        with self.assertRaises(sender.SendError): self.fixture(mapping='1')
+    def test_invalid_or_mismatched_nozzle_rejected(self):
+        for bad_mapping in ('3', '1 2', ''):
+            with self.subTest(mapping=bad_mapping), self.assertRaises(sender.SendError):
+                self.fixture(mapping=bad_mapping)
+        with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
+            sender.preflight(self.status(), self.fixture(mapping='2'), 5)
+        with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
+            sender.preflight(self.status(), self.fixture(mapping='1'), 1)
+    def test_record_params_builds_studio_local_print_record_schema(self):
+        cfg_3mf = Path(self.temp.name) / 'config.3mf'
+        right_info = self.fixture(mapping='2')
+        sender.create_config_3mf(self.path, cfg_3mf)
+        with zipfile.ZipFile(cfg_3mf) as z:
+            self.assertIn('Metadata/slice_info.config', z.namelist())
+            self.assertNotIn('Metadata/plate_1.gcode', z.namelist())
+        right = sender.record_print_params(self.path, cfg_3mf, right_info, self.status(), 1)
+        self.assertEqual(json.loads(right['ams_mapping']), [1])
+        self.assertEqual(json.loads(right['ams_mapping2']), [{'ams_id':0,'slot_id':1}])
+        self.assertEqual(json.loads(right['ams_mapping_info'])[0]['nozzleId'], 0)
+        self.assertEqual(json.loads(right['nozzle_mapping']), [0])
+        left_info = self.fixture(mapping='1')
+        left = sender.record_print_params(self.path, cfg_3mf, left_info, self.status(), 7)
+        self.assertEqual(json.loads(left['ams_mapping']), [7])
+        self.assertEqual(json.loads(left['ams_mapping2']), [{'ams_id':1,'slot_id':3}])
+        self.assertEqual(json.loads(left['ams_mapping_info'])[0]['nozzleId'], 1)
+        self.assertEqual(json.loads(left['nozzle_mapping']), [1])
     def test_busy_and_paused_states_rejected(self):
         info = self.fixture()
         for state in ['PREPARE','RUNNING','PAUSE','UNKNOWN','']:

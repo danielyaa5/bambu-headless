@@ -238,11 +238,22 @@ def legacy_print(args) -> int:
             argv += ['--repeat']
         if args.no_timelapse:
             argv += ['--no-timelapse']
+        if getattr(args, 'no_cloud_record', False):
+            argv += ['--no-cloud-record']
         with contextlib.redirect_stdout(sys.stderr if args.json else sys.stdout):
             rc = core.main(argv)
         if args.json:
             output(args, json.loads(report.read_text()))
         return rc
+
+
+def history_line(task: dict) -> str:
+    return (
+        f"{task.get('id', '?')} | {task.get('startTime', '?')} | "
+        f"{quoted(task.get('title', '?'))} | status={task.get('status', '?')} | "
+        f"mode={task.get('mode', '?')} | plate {task.get('plateIndex', '?')} | "
+        f"{task.get('weight', 0)} g"
+    )
 
 
 def build_parser():
@@ -258,6 +269,11 @@ def build_parser():
         p.add_argument('--report', type=Path, help='Save the latest result as a private JSON file')
 
     options(sub.add_parser('printers', help='List saved Studio printers, without access codes'), False)
+    history = sub.add_parser('history', help='List Bambu Handy / Studio cloud print history tasks')
+    options(history, False)
+    history.add_argument('--serial', default=os.environ.get('BAMBU_SERIAL') or None, help='Saved printer serial (or BAMBU_SERIAL)')
+    history.add_argument('--limit', type=int, default=20, help='Maximum tasks to return (1..100)')
+    history.add_argument('--offset', type=int, default=0, help='Zero-based task offset')
     inspect = sub.add_parser('inspect', help='Validate a sliced file without contacting a printer')
     options(inspect, False)
     inspect.add_argument('file', type=Path)
@@ -278,6 +294,7 @@ def build_parser():
         p.add_argument('--tray', type=int, default=1)
         p.add_argument('--repeat', action='store_true', help='Intentionally reprint a file with an existing receipt')
         p.add_argument('--no-timelapse', action='store_true', help='Skip the printer camera timelapse for this job')
+        p.add_argument('--no-cloud-record', action='store_true', help='Start via raw LAN MQTT without registering a Bambu Handy cloud history task')
     upload = sub.add_parser('upload', help='Upload and verify a sliced file without starting it')
     options(upload)
     upload.add_argument('file', type=Path)
@@ -317,6 +334,12 @@ def main(argv=None) -> int:
         return 0
     if args.command == 'inspect':
         output(args, core.inspect_file(args.file.expanduser(), args.plate))
+        return 0
+    if args.command == 'history':
+        connection = core.load_connection('0.0.0.0', args.serial)
+        result = core.cloud_history(connection, limit=args.limit, offset=args.offset)
+        lines = [f"Total cloud history tasks: {result['total']}"] + [history_line(t) for t in result['tasks']]
+        output(args, result, '\n'.join(lines))
         return 0
     if not args.host:
         parser.error('Set --host or BAMBU_HOST. Saved-printer discovery does not infer LAN addresses.')

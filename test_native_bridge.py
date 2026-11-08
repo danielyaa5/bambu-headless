@@ -93,6 +93,30 @@ class NativeBridgeTests(unittest.TestCase):
         for bad in [cfg|{'target_c':150},cfg|{'payload':json.dumps({'print':{'command':'gcode_line','sequence_id':'42','param':'G28\n'}})}]:
             bad_res=subprocess.run([str(self.binary)],input=json.dumps(bad),capture_output=True,text=True,timeout=5)
             self.assertEqual(bad_res.returncode,3)
+    def test_start_with_record_returns_cloud_job_id(self):
+        cfg={'action':'start','control':'','job_name':'fixture.gcode','sequence_id':'42',
+             'scratch':'start-record','plugin':str(self.plugin),'serial':'TEST_PRINTER','expected_model':'O1D',
+             'payload':json.dumps({'print':{'command':'project_file','sequence_id':'42','param':'','subtask_name':'fixture.gcode'}}),
+             'record_params':{'task_name':'fixture.gcode','project_name':'fixture','filename':'/tmp/a.3mf',
+                              'config_filename':'/tmp/c.3mf','plate_index':1,'bed_type':'textured_plate',
+                              'ams_mapping':'[7]','ams_mapping2':'[{"ams_id":1,"slot_id":3}]',
+                              'ams_mapping_info':'[{"ams":7}]','nozzle_mapping':'[1]','nozzles_info':'[{"id":1}]'}}
+        result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
+        events=[json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode,0)
+        self.assertTrue(events[-1]['confirmed'])
+        self.assertTrue(any(e.get('event')=='dispatching' and e.get('mode')=='cloud_record' for e in events))
+        self.assertTrue(any(e.get('event')=='wait_printer' and e.get('job_id')==777001 for e in events))
+    def test_history_returns_user_tasks_without_printer_connection(self):
+        cfg={'action':'history','limit':5,'offset':0,'scratch':'history','plugin':str(self.plugin),'serial':'TEST_PRINTER'}
+        result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
+        events=[json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode,0)
+        self.assertEqual(events[-1]['event'],'history')
+        self.assertEqual(events[-1]['total'],1)
+        self.assertEqual(events[-1]['tasks'][0]['id'],9001)
+        self.assertNotIn('secretToken',json.dumps(events[-1]))
+        self.assertNotIn('extraSecret',json.dumps(events[-1]))
 
 
 if __name__ == '__main__':

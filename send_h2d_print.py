@@ -80,13 +80,18 @@ def inspect_file(path: Path, plate: int = 1) -> dict:
             if metadata.get('printer_model_id', MODEL_IDS[model]) != MODEL_IDS[model]:
                 raise SendError('Plate and project printer models disagree.')
             if model == 'Bambu Lab H2D':
-                if metadata.get('filament_maps') != '2':
-                    raise SendError('This sender supports the right H2D nozzle only; recheck the sliced nozzle mapping.')
+                fmap = metadata.get('filament_maps')
+                if fmap not in ('1', '2'):
+                    raise SendError('This sender supports a single H2D nozzle (left=1 or right=2); recheck the sliced nozzle mapping.')
+                hw_nozzle_id = 0 if fmap == '2' else 1
             elif not metadata.get('filament_maps') or set(metadata['filament_maps'].split()) != {'1'}:
                 raise SendError('P1S slices must map all filament presets to the single extruder.')
+            else:
+                fmap = '1'
+                hw_nozzle_id = 0
             nozzle = filaments[0].get('nozzle_diameter', '')
             if float(nozzle) != 0.4:
-                raise SendError('This sender supports a 0.4 mm nozzle only (right nozzle on H2D).')
+                raise SendError('This sender supports a 0.4 mm nozzle only.')
             material = filaments[0].get('type')
             bed_type = settings.get('curr_bed_type')
             bed_types = {'High Temp Plate': 'hot_plate', 'Textured PEI Plate': 'textured_plate', 'Cool Plate': 'cool_plate', 'Engineering Plate': 'eng_plate', 'SuperTack Plate': 'supertack_plate'}
@@ -94,7 +99,9 @@ def inspect_file(path: Path, plate: int = 1) -> dict:
                 raise SendError('Unsupported plate type; do not guess the printer plate code.')
             info = dict(filename=path.name, bytes=len(content), md5=hashlib.md5(content).hexdigest(),
                         gcode_md5=expected, plate=plate, param=gcode_path, material=material,
-                        color=filaments[0].get('color'), printer_model=model, model_id=MODEL_IDS[model], nozzle_mm=0.4,
+                        tray_info_idx=filaments[0].get('tray_info_idx'),
+                        color=filaments[0].get('color'), printer_model=model, model_id=MODEL_IDS[model],
+                        filament_maps=fmap, hw_nozzle_id=hw_nozzle_id, nozzle_mm=0.4,
                         bed_type=bed_types[bed_type], layer_height=settings.get('layer_height'),
                         estimated_seconds=int(metadata.get('prediction', 0)), grams=float(metadata.get('weight', 0)))
             if model == 'Bambu Lab H2D':
@@ -147,6 +154,7 @@ def load_connection(host: str, serial: str | None) -> dict:
         if region not in ('North America', 'US', 'United States', ''):
             raise SendError('This sender is validated for the US cloud region only.')
         return dict(serial=serial, ip=host, access_code=code, country='US',
+                    slicer_uid=conf.get('app', {}).get('slicer_uuid', ''),
                     plugin=str(CONFIG / ('plugins/libbambu_networking.so' if IS_LINUX else 'plugins/libbambu_networking.dylib')),
                     config_dir=str(CONFIG), cert_dir=str(CERT_DIR))
     except (OSError, ValueError):
@@ -216,26 +224,95 @@ def merged_status(events: list[dict]) -> dict:
 def preflight(status: dict, info: dict, tray: int) -> None:
     if status.get('gcode_state') not in IDLE_STATES:
         raise SendError(f'Printer is {status.get("gcode_state", "unknown")}; refusing to interrupt an active job.')
-    if status.get('model_id') != info['model_id']:
+    if status.get('model_id') != info.get('model_id', 'O1D'):
         raise SendError('Live printer model is unknown or does not match the sliced file.')
+    hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
+    if info.get('printer_model', 'Bambu Lab H2D') == 'Bambu Lab H2D':
+        expected_hw_nozzle = 0 if (tray // 4) == 0 else 1
+        if hw_nozzle_id != expected_hw_nozzle:
+            raise SendError('Selected AMS tray feeds a different H2D nozzle than the sliced file.')
     matching = [t for t in status.get('trays', []) if str(t.get('ams_id')) == str(tray // 4) and str(t.get('id')) == str(tray % 4)]
     if len(matching) != 1 or matching[0].get('tray_type') != info['material']:
         raise SendError('Selected AMS tray is missing or its material differs from the sliced file.')
-    if info['printer_model'] == 'Bambu Lab P1S':
+    if info.get('printer_model') == 'Bambu Lab P1S':
         diameter = status.get('nozzle_diameter')
     else:
-        nozzles = [n for n in status.get('nozzles', []) if n.get('id') == 0]
+        nozzles = [n for n in status.get('nozzles', []) if n.get('id') == hw_nozzle_id]
         diameter = nozzles[0].get('diameter') if len(nozzles) == 1 else None
     try:
-        matches = float(diameter) == info['nozzle_mm']
+        matches = float(diameter) == float(info.get('nozzle_mm', info.get('right_nozzle_mm', 0.4)))
     except (TypeError, ValueError):
         matches = False
     if not matches:
         raise SendError('Live nozzle diameter is unknown or does not match the sliced file.')
 
+def rgba_hex(color: str | None, fallback: str = 'FFFFFFFF') -> str:
+    raw = (color or '').strip().lstrip('#').upper()
+    if re.fullmatch(r'[0-9A-F]{6}', raw):
+        return raw + 'FF'
+    if re.fullmatch(r'[0-9A-F]{8}', raw):
+        return raw
+    return fallback
+
+def create_config_3mf(source_3mf: Path, dst_3mf: Path) -> Path:
+    """Create the lightweight config 3MF (thumbnails + slice metadata, no G-code or mesh objects)."""
+    with zipfile.ZipFile(source_3mf, 'r') as src, zipfile.ZipFile(dst_3mf, 'w', compression=zipfile.ZIP_DEFLATED) as dst:
+        for item in src.infolist():
+            name = item.filename
+            if (name.startswith('3D/Objects/') or name.startswith('Auxiliaries/') or
+                    (name.startswith('Metadata/') and (name.endswith('.gcode') or name.endswith('.gcode.md5')))):
+                continue
+            dst.writestr(item, src.read(name))
+    return dst_3mf
+
+def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, tray: int, timelapse: bool = True) -> dict:
+    ams_id, slot_id = tray // 4, tray % 4
+    hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
+    matching = [t for t in status.get('trays', []) if str(t.get('ams_id')) == str(ams_id) and str(t.get('id')) == str(slot_id)]
+    tray_info = matching[0] if matching else {}
+    source_color = rgba_hex(info.get('color'))
+    target_color = rgba_hex(tray_info.get('tray_color'), fallback=source_color)
+    filament_id = tray_info.get('tray_info_idx') or info.get('tray_info_idx') or 'GFL99'
+    nozzle_by_id = {int(n['id']): n for n in status.get('nozzles', []) if isinstance(n, dict) and 'id' in n}
+    nozzle_ids = (0,) if info.get('printer_model') == 'Bambu Lab P1S' else (1, 0)
+    nozzles_info = []
+    for nid in nozzle_ids:
+        live = nozzle_by_id.get(nid, {})
+        nozzles_info.append({
+            'id': nid,
+            'type': live.get('type') or '',
+            'flowSize': 'standard_flow',
+            'diameter': float(live.get('diameter', 0.4)),
+        })
+    project_stem = info['filename'][:-10] if info['filename'].endswith('.gcode.3mf') else info['filename'][:-4]
+    return {
+        'task_name': info['filename'][:-4],
+        'project_name': project_stem,
+        'preset_name': '',
+        'filename': str(path),
+        'config_filename': str(config_3mf),
+        'plate_index': int(info['plate']),
+        'print_type': 'from_sdcard_view',
+        'bed_type': info['bed_type'],
+        'timelapse': bool(timelapse),
+        'ams_mapping': json.dumps([tray], separators=(',', ':')),
+        'ams_mapping2': json.dumps([{'ams_id': ams_id, 'slot_id': slot_id}], separators=(',', ':')),
+        'ams_mapping_info': json.dumps([{
+            'ams': tray,
+            'sourceColor': source_color,
+            'targetColor': target_color,
+            'filamentId': filament_id,
+            'filamentType': info['material'],
+            'targetFilamentType': '',
+            'weight': float(info.get('grams', 0.0)),
+            'nozzleId': hw_nozzle_id,
+        }], separators=(',', ':')),
+        'nozzle_mapping': json.dumps([hw_nozzle_id], separators=(',', ':')),
+        'nozzles_info': json.dumps(nozzles_info, separators=(',', ':')),
+    }
+
 def print_payload(info: dict, tray: int, sequence: str, timelapse: bool = True) -> dict:
-    # Right logical nozzle is already baked into this slice (filament_maps=2).
-    # H2D hardware nozzle id 0 is right; AMS 0/slot 1 is A2.
+    hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
     payload = {'print': dict(command='project_file', sequence_id=sequence, param=info['param'],
                           project_id='0', profile_id='0', task_id='0', subtask_id='0',
                           subtask_name=info['filename'][:-4], url='ftp://' + info['filename'],
@@ -243,9 +320,9 @@ def print_payload(info: dict, tray: int, sequence: str, timelapse: bool = True) 
                           bed_leveling=True, auto_bed_leveling=2, flow_cali=False,
                           vibration_cali=True, layer_inspect=True, use_ams=True,
                           ams_mapping=[tray], ams_mapping2=[{'ams_id': tray // 4, 'slot_id': tray % 4}],
-                          nozzle_mapping=[0], nozzle_offset_cali=0, extrude_cali_flag=0,
+                          nozzle_mapping=[hw_nozzle_id], nozzle_offset_cali=0, extrude_cali_flag=0,
                           extrude_cali_manual_mode=-1)}
-    if info['printer_model'] == 'Bambu Lab P1S':
+    if info.get('printer_model') == 'Bambu Lab P1S':
         p = payload['print']
         for key in ('auto_bed_leveling', 'ams_mapping2', 'nozzle_mapping', 'nozzle_offset_cali',
                     'extrude_cali_flag', 'extrude_cali_manual_mode'):
@@ -318,14 +395,30 @@ def upload_verified(path: Path, info: dict, connection: dict) -> str:
 def verified_start(events: list[dict], name: str) -> dict | None:
     job = None
     state = None
+    alt_name = name[:-6] if name.endswith('.gcode') else None
+    cloud_job_id = next((e['job_id'] for e in events if e.get('event') == 'wait_printer' and 'job_id' in e), None)
     for e in events:
         if e.get('command') != 'push_status':
             continue
         job = e.get('subtask_name', job)
         state = e.get('gcode_state', state)
-        if job == name and state in {'PREPARE', 'RUNNING'}:
-            return {k: e[k] for k in ('gcode_state', 'stg_cur', 'layer_num', 'mc_percent', 'mc_remaining_time') if k in e} | {'job': job, 'gcode_state': state}
+        if job in (name, alt_name) and job is not None and state in {'PREPARE', 'RUNNING'}:
+            out = {k: e[k] for k in ('gcode_state', 'stg_cur', 'layer_num', 'mc_percent', 'mc_remaining_time') if k in e} | {'job': job, 'gcode_state': state}
+            if cloud_job_id is not None:
+                out['cloud_job_id'] = cloud_job_id
+            return out
     return None
+
+def cloud_history(connection: dict, limit: int = 20, offset: int = 0) -> dict:
+    if not (1 <= limit <= 100 and offset >= 0):
+        raise SendError('History limit must be 1..100 and offset must be nonnegative.')
+    events, rc = bridge_run(connection, 'history', {'limit': limit, 'offset': offset})
+    if rc:
+        raise SendError('Cloud history query failed; ensure Bambu Studio has an active signed-in session.')
+    for event in events:
+        if event.get('event') == 'history':
+            return {'total': int(event.get('total', 0)), 'tasks': list(event.get('tasks', []))}
+    raise SendError('No cloud history response received.')
 
 def write_private(path: Path, value: dict) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -345,6 +438,7 @@ def main(argv=None) -> int:
     parser.add_argument('--repeat', action='store_true', help='Explicitly permit another attempt for this file after checking prior outcome')
     parser.add_argument('--sign-probe', action='store_true', help='Read-only calibration probe; does not prove print authorization')
     parser.add_argument('--no-timelapse', action='store_true', help='Skip the printer camera timelapse for this job')
+    parser.add_argument('--no-cloud-record', action='store_true', help='Start via raw LAN MQTT without registering a Bambu Handy cloud history task')
     parser.add_argument('--report', type=Path, help='Save a sanitized verification report (no access codes, tokens, serial or host)')
     args = parser.parse_args(argv)
     if not 0 <= args.tray < 16:
@@ -357,9 +451,10 @@ def main(argv=None) -> int:
         return run_locked(args, path, info, connection, cache, printer_key)
 
 def run_locked(args, path, info, connection, cache, printer_key) -> int:
+    cloud_record = not getattr(args, 'no_cloud_record', False)
     report = {'file': info, 'ams_tray': args.tray, 'timelapse': not args.no_timelapse,
-              'gui_used': False, 'helper_path_shim': True, 'started': False}
-    print(f"File checked: {info['filename']} | {info['printer_model']} | {info['material']} | 0.4 mm | AMS tray {args.tray}", flush=True)
+              'cloud_record': cloud_record, 'gui_used': False, 'helper_path_shim': True, 'started': False}
+    print(f"File checked: {info['filename']} (Plate {info['plate']}) | {info['printer_model']} | {info['material']} | 0.4 mm | AMS tray {args.tray}", flush=True)
     events, rc = bridge_run(connection, 'status', {'expected_model': info['model_id']})
     if rc:
         raise SendError('Live printer connection failed; no print was submitted.')
@@ -387,8 +482,15 @@ def run_locked(args, path, info, connection, cache, printer_key) -> int:
         report.update(submission_attempted=True, submitted_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))
         write_private(receipt_path, report)
         print('Submitting once through the official networking plugin; waiting for matching PREPARE/RUNNING...', flush=True)
-        events, rc = bridge_run(connection, 'start', {'sequence_id': sequence, 'job_name': job_name,
-            'expected_model': info['model_id'], 'payload': json.dumps(payload, separators=(',', ':'))})
+        job_req = {'sequence_id': sequence, 'job_name': job_name,
+                   'expected_model': info['model_id'], 'payload': json.dumps(payload, separators=(',', ':'))}
+        if cloud_record:
+            with tempfile.TemporaryDirectory(prefix='h2d-config-') as cfg_dir:
+                cfg_3mf = create_config_3mf(path, Path(cfg_dir) / 'config.3mf')
+                job_req['record_params'] = record_print_params(path, cfg_3mf, info, status, args.tray, timelapse=report['timelapse'])
+                events, rc = bridge_run(connection, 'start', job_req)
+        else:
+            events, rc = bridge_run(connection, 'start', job_req)
         report['events'] = events
         confirmation = verified_start(events, job_name)
         report['started'] = rc == 0 and confirmation is not None

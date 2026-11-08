@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Shared macOS/Linux adapter for Bambu Studio's unmodified networking plugin.
-// The public ABI is pinned to Studio v02.08.02.61 / plugin 02.08.02.x.
+// The public ABI is pinned to Studio v02.08.02.x - v02.09.01.x.
 // No GUI or app-binary modification. The launcher loads a process-local
 // executable-path shim into this helper, not into Bambu Studio.
 #include <nlohmann/json.hpp>
@@ -54,7 +54,7 @@ int main(){
     json cfg=json::parse(input,nullptr,false);
     if(!cfg.is_object())_exit(3);
     std::string action=str(cfg,"action"), serial=str(cfg,"serial"), ip=str(cfg,"ip");
-    if(action!="status"&&action!="sign_probe"&&action!="start"&&action!="control"&&action!="bed_temp")_exit(3);
+    if(action!="status"&&action!="history"&&action!="sign_probe"&&action!="start"&&action!="control"&&action!="bed_temp")_exit(3);
     const std::string expected_model=str(cfg,"expected_model");
     if((action=="start"||!expected_model.empty())&&expected_model!="C12"&&expected_model!="O1D")_exit(3);
     const std::string control=str(cfg,"control");
@@ -65,14 +65,35 @@ int main(){
     if(!lib){emit({{"event","error"},{"message","Plugin could not be loaded"}});_exit(3);}
     auto version=sym<std::string(*)()>(lib,"bambu_network_get_version")();
     emit({{"event","plugin"},{"version",version}});
-    if(version.substr(0,8)!="02.08.02"){
+    if(version.substr(0,8)!="02.08.02"&&version.substr(0,8)!="02.09.01"){
         emit({{"event","error"},{"message","Plugin ABI changed; update the pinned adapter before printing"}});_exit(3);
     }
     void *agent=sym<void*(*)(std::string)>(lib,"bambu_network_create_agent")(str(cfg,"scratch"));
     if(!agent)_exit(3);
+    if(auto init_log=reinterpret_cast<int(*)(void*)>(dlsym(lib,"bambu_network_init_log")))
+        init_log(agent);
+    const std::string country=str(cfg,"country").empty()?"US":str(cfg,"country");
     sym<int(*)(void*,std::string)>(lib,"bambu_network_set_config_dir")(agent,str(cfg,"config_dir"));
     sym<int(*)(void*,std::string,std::string)>(lib,"bambu_network_set_cert_file")(agent,str(cfg,"cert_dir"),"slicer_base64.cer");
-    sym<int(*)(void*,std::string)>(lib,"bambu_network_set_country_code")(agent,str(cfg,"country"));
+    sym<int(*)(void*,std::string)>(lib,"bambu_network_set_country_code")(agent,country);
+    if(auto set_cc=reinterpret_cast<int(*)(void*,BBL::GetCountryCodeFn)>(dlsym(lib,"bambu_network_set_get_country_code_fn")))
+        set_cc(agent,[country](){return country;});
+    if(auto set_hdr=reinterpret_cast<int(*)(void*,std::map<std::string,std::string>)>(dlsym(lib,"bambu_network_set_extra_http_header"))){
+        std::map<std::string,std::string> headers={
+            {"X-BBL-Client-Type","slicer"},
+            {"X-BBL-Client-Name","BambuStudio"},
+            {"X-BBL-Client-Version","02.08.02.61"},
+#ifdef __linux__
+            {"X-BBL-OS-Type","linux"},
+#else
+            {"X-BBL-OS-Type","macos"},
+#endif
+            {"X-BBL-Language","en-US"}
+        };
+        const std::string slicer_uid=str(cfg,"slicer_uid");
+        if(!slicer_uid.empty())headers["X-BBL-Device-ID"]=slicer_uid;
+        set_hdr(agent,headers);
+    }
     std::atomic<bool> connected{false},got_status{false},got_start{false},got_probe{false},rejected{false};
     std::atomic<bool> submitted{false},cert_ready{false};
     std::atomic<bool> control_ack{false},control_state{false},bed_ack{false},bed_state{false};
@@ -80,7 +101,12 @@ int main(){
     std::string current_state,current_job;
     long long current_error=0;
     bool error_known=false;
-    const std::string expected=str(cfg,"job_name"),sequence=str(cfg,"sequence_id");
+    json rp=cfg.contains("record_params")&&cfg["record_params"].is_object()?cfg["record_params"]:json::object();
+    const bool has_rp=!rp.empty();
+    const std::string expected=str(cfg,"job_name"),expected_alt=has_rp?str(rp,"project_name"):std::string(),sequence=str(cfg,"sequence_id");
+    auto matches_expected=[&](const std::string &job){
+        return (!expected.empty()&&job==expected)||(!expected_alt.empty()&&job==expected_alt);
+    };
     BBL::OnLocalConnectedFn conn=[&](int status,std::string,std::string){if(status==0)connected=true;};
     BBL::OnPrinterConnectedFn pc=[&](std::string){connected=true;};
     BBL::OnMessageFn onmsg=[&](std::string,std::string message){
@@ -116,7 +142,7 @@ int main(){
             if(!p["gcode_state"].is_null()){current_state=str(p,"gcode_state");got_status=true;}
             if(!p["subtask_name"].is_null())current_job=str(p,"subtask_name");
             if(!p["print_error"].is_null()){current_error=number(p["print_error"]);error_known=true;}
-            if(submitted && current_job==expected && (current_state=="PREPARE"||current_state=="RUNNING"))got_start=true;
+            if(submitted && matches_expected(current_job) && (current_state=="PREPARE"||current_state=="RUNNING"))got_start=true;
             if(action=="control"&&submitted&&!p["gcode_state"].is_null()){
                 bool same_job=current_job==expected;
                 bool stopped=control=="stop"&&(current_state=="IDLE"||current_state=="FAILED")&&(same_job||current_job.empty());
@@ -130,7 +156,7 @@ int main(){
             got_probe=true;
             if(number(p["err_code"])!=0)rejected=true;
         }
-        if(str(p,"command")=="project_file" && str(p,"sequence_id")==sequence){
+        if(str(p,"command")=="project_file" && (str(p,"sequence_id")==sequence || has_rp)){
             if(number(p["err_code"])!=0 || str(p,"result")=="FAIL" || str(p,"result")=="fail")rejected=true;
         }
         if(action=="control"&&submitted&&str(p,"command")==control&&str(p,"sequence_id")==sequence){
@@ -151,6 +177,35 @@ int main(){
     sym<int(*)(void*,BBL::OnMessageFn)>(lib,"bambu_network_set_on_message_fn")(agent,onmsg);
     int rc=sym<int(*)(void*)>(lib,"bambu_network_start")(agent);
     if(rc!=0){emit({{"event","error"},{"message","Plugin startup failed"},{"rc",rc}});_exit(4);}
+    if(action=="history"){
+        BBL::TaskQueryParams q;
+        q.dev_id=serial;
+        q.status=0;
+        q.offset=cfg["offset"].is_number_integer()?static_cast<int>(number(cfg["offset"])):0;
+        q.limit=cfg["limit"].is_number_integer()?static_cast<int>(number(cfg["limit"])):20;
+        if(q.offset<0||q.limit<1||q.limit>100)_exit(3);
+        std::string body;
+        rc=sym<int(*)(void*,BBL::TaskQueryParams,std::string*)>(lib,"bambu_network_get_user_tasks")(agent,q,&body);
+        if(rc!=0){emit({{"event","error"},{"message","Cloud history query failed"},{"rc",rc}});_exit(4);}
+        json parsed=parse(body);
+        json tasks=json::array();
+        if(parsed["hits"].is_array()){
+            for(auto &hit : parsed["hits"]){
+                if(!hit.is_object())continue;
+                json t=pick(hit,{"id","title","status","startTime","endTime","weight","length","costTime","mode","deviceModel","deviceName","plateIndex","bedType","failedType"});
+                if(hit["amsDetailMapping"].is_array()){
+                    json ams=json::array();
+                    for(auto &m : hit["amsDetailMapping"])
+                        if(m.is_object())
+                            ams.push_back(pick(m,{"ams","filamentId","filamentType","nozzleId","sourceColor","targetColor","weight"}));
+                    t["amsDetailMapping"]=ams;
+                }
+                tasks.push_back(t);
+            }
+        }
+        emit({{"event","history"},{"total",parsed.value("total",0)},{"tasks",tasks}});
+        _exit(0);
+    }
     if(!expected_model.empty()){
         BBL::detectResult detected{};
         rc=sym<int(*)(void*,std::string,std::string,BBL::detectResult&)>(lib,"bambu_network_bind_detect")(agent,ip,"secure",detected);
@@ -216,6 +271,75 @@ int main(){
             submitted=true;
         }
         emit({{"event","dispatching"}});
+    }else if(has_rp){
+        const int plate_index=rp["plate_index"].is_number_integer()?static_cast<int>(number(rp["plate_index"])):0;
+        if(expected.empty()||str(rp,"task_name")!=expected||str(rp,"project_name").empty()||
+           str(rp,"filename").empty()||str(rp,"config_filename").empty()||plate_index<1||
+           str(rp,"bed_type").empty()||str(rp,"ams_mapping").empty()||str(rp,"ams_mapping2").empty()||
+           str(rp,"ams_mapping_info").empty()||str(rp,"nozzle_mapping").empty()||str(rp,"nozzles_info").empty())_exit(3);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex);
+            if(current_state!="IDLE"&&current_state!="FINISH"&&current_state!="FAILED"){
+                emit({{"event","error"},{"message","Printer is busy; start refused"}});_exit(5);
+            }
+            submitted=true;
+        }
+        BBL::PrintParams params;
+        params.dev_id=serial;
+        params.dev_ip=ip;
+        params.username="bblp";
+        params.password=str(cfg,"access_code");
+        params.use_ssl_for_ftp=true;
+        params.use_ssl_for_mqtt=true;
+        params.connection_type="cloud";
+        params.print_type=str(rp,"print_type").empty()?"from_sdcard_view":str(rp,"print_type");
+        params.task_name=str(rp,"task_name");
+        params.project_name=str(rp,"project_name");
+        params.preset_name=str(rp,"preset_name");
+        params.filename=str(rp,"filename");
+        params.config_filename=str(rp,"config_filename");
+        params.plate_index=plate_index;
+        params.ftp_folder=str(rp,"ftp_folder");
+        params.ftp_file=str(rp,"ftp_file");
+        params.ftp_file_md5=str(rp,"ftp_file_md5");
+        params.nozzle_mapping=str(rp,"nozzle_mapping");
+        params.ams_mapping=str(rp,"ams_mapping");
+        params.ams_mapping2=str(rp,"ams_mapping2");
+        params.ams_mapping_info=str(rp,"ams_mapping_info");
+        params.nozzles_info=str(rp,"nozzles_info");
+        params.task_bed_leveling=true;
+        params.auto_bed_leveling=2;
+        params.task_flow_cali=false;
+        params.auto_flow_cali=0;
+        params.task_vibration_cali=true;
+        params.task_layer_inspect=expected_model!="C12";
+        params.task_record_timelapse=rp["timelapse"].is_boolean()?rp["timelapse"].get<bool>():true;
+        params.task_timelapse_use_internal=false;
+        params.task_use_ams=true;
+        params.task_bed_type=str(rp,"bed_type");
+        params.auto_offset_cali=0;
+        params.extruder_cali_manual_mode=-1;
+        params.task_ext_change_assist=false;
+        params.try_emmc_print=false;
+        emit({{"event","dispatching"},{"mode","cloud_record"}});
+        auto start_with_record=sym<int(*)(void*,BBL::PrintParams,BBL::OnUpdateStatusFn,BBL::WasCancelledFn,BBL::OnWaitFn)>(
+            lib,"bambu_network_start_local_print_with_record");
+        BBL::OnUpdateStatusFn update_fn=[&](int stage,int code,std::string){
+            emit({{"event","print_stage"},{"stage",stage},{"code",code}});
+        };
+        BBL::WasCancelledFn cancel_fn=[&](){return rejected.load();};
+        BBL::OnWaitFn wait_fn=[&](int stage,std::string job_info){
+            json info=parse(job_info);
+            json ev={{"event","wait_printer"},{"stage",stage}};
+            if(info.contains("job_id"))ev["job_id"]=info["job_id"];
+            emit(ev);
+            for(int i=0;i<350&&!rejected&&!got_start;i++)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            return got_start.load()&&!rejected.load();
+        };
+        rc=start_with_record(agent,params,update_fn,cancel_fn,wait_fn);
+        emit({{"event","send_result"},{"rc",rc},{"recorded",rc==0||rc==BAMBU_NETWORK_ERR_PRINT_SP_WAIT_PRINTER_FAILED}});
+        if(rc!=0&&rc!=BAMBU_NETWORK_ERR_PRINT_SP_WAIT_PRINTER_FAILED)_exit(6);
     }else{
         {
             std::lock_guard<std::mutex> lock(state_mutex);
@@ -229,9 +353,11 @@ int main(){
         submitted=true;
         emit({{"event","dispatching"}});
     }
-    rc=send(agent,serial,payload,1,0);
-    emit({{"event","send_result"},{"rc",rc}});
-    if(rc!=0)_exit(6);
+    if(!has_rp){
+        rc=send(agent,serial,payload,1,0);
+        emit({{"event","send_result"},{"rc",rc}});
+        if(rc!=0)_exit(6);
+    }
     auto complete=[&](){
         if(action=="control")return control_ack.load()&&control_state.load();
         if(action=="bed_temp")return bed_state.load()&&!rejected.load();

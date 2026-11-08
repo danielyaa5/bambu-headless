@@ -12,13 +12,14 @@ Use `--host` on an individual command to override that value. `--serial YOUR_PRI
 
 ```sh
 python3 bambu.py printers
+python3 bambu.py history --limit 10
 python3 bambu.py status
 python3 bambu.py status --json
 python3 bambu.py inspect part.gcode.3mf
 python3 bambu.py check part.gcode.3mf --tray 1
 ```
 
-`printers` discovers saved identities in Studio's two access-code maps. It reveals serials, not code values. It does not scan the network or infer an address. `inspect` is offline; `check` verifies the live printer's identity/model and compares the slice with a fresh idle state, AMS material and nozzle diameter. Supported slices target H2D (right nozzle) or P1S, use a 0.4 mm nozzle, and contain one used filament with slice ID 1. Unused project filament presets are allowed on P1S when mapped to its single extruder.
+`printers` discovers saved identities in Studio's two access-code maps. It reveals serials, not code values. It does not scan the network or infer an address. `history` fetches your recent Bambu Handy / Studio cloud print task records using your signed-in Bambu Studio session without opening a printer LAN connection. `inspect` is offline; `check` verifies the live printer's identity/model and compares the slice with a fresh idle state, AMS material and nozzle diameter. Supported slices target H2D (right nozzle with AMS 0 trays 0–3, or left nozzle with AMS 1 trays 4–7) or P1S, use a 0.4 mm nozzle, and contain one used filament with slice ID 1. Unused project filament presets are allowed on P1S when mapped to its single extruder.
 
 `status` works while printing and needs no local file. Human output includes the job, progress, layer, remaining time, bed temperature, AMS trays and nozzle configuration. JSON also retains the printer's reported generic nozzle-temperature fields without assuming which side they represent.
 

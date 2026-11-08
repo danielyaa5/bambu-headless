@@ -251,6 +251,15 @@ class CLITests(unittest.TestCase):
             bambu.main(['files','list','--host','printer.example','--json'])
             self.assertEqual(json.loads(out.getvalue()),{'files':listing})
         self.assertNotIn('\x1b',bambu.status_line({'state':'RUNNING','job':'job\x1b[2J'}))
+    def test_history_fetches_cloud_print_records(self):
+        hit={'id':9001,'title':'part','status':2,'startTime':'2026-01-01T00:00:00Z',
+             'costTime':120,'weight':10.5,'deviceModel':'Bambu Lab H2D','amsDetailMapping':[{'ams':7,'filamentId':'GFA00','filamentType':'PLA'}]}
+        with mock.patch.object(core,'load_connection',return_value={'serial':'TEST_PRINTER'}), \
+             mock.patch.object(core,'bridge_run',return_value=([{'event':'history','total':1,'tasks':[hit]}],0)), \
+             redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(bambu.main(['history','--limit','5','--json']),0)
+            self.assertEqual(json.loads(out.getvalue())['total'],1)
+        self.assertIn('9001',bambu.history_line(hit))
 
 
 if __name__ == '__main__':

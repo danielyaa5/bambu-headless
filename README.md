@@ -54,12 +54,13 @@ python3 bambu.py files list
 | Command | Behavior |
 | --- | --- |
 | `printers` | Lists Studio's saved printer identities, never access-code values; no LAN scan |
+| `history` | Lists Bambu Handy / Studio cloud print history tasks (`--limit`, `--offset`) |
 | `status` | Fresh job, progress, temperatures, AMS and nozzle details |
 | `watch` | Progress monitoring, JSON Lines, deadlines and optional completion exit |
 | `inspect FILE` | Offline validation and slice details |
 | `check FILE` | Slice and live printer compatibility checks |
 | `upload FILE` | Upload plus full read-back verification; no print command |
-| `print FILE` | Upload and start, preserving the original submission guards |
+| `print FILE` | Upload, register in Bambu Handy cloud history (or `--no-cloud-record`), and start |
 | `files list/download/rename/delete` | Printer storage management; deletion requires `--yes` |
 | `pause/resume/cancel` | One control command, requiring `--yes` and the exact `--job` name |
 | `bed-temp TEMP` | Set target bed temperature (`0..120` C) via `M140 S<TEMP>` and confirm target telemetry |
@@ -72,7 +73,7 @@ After checking that the plate is clear and the intended material is loaded:
 python3 bambu.py print part.gcode.3mf --host printer.example
 ```
 
-Defaults: plate 1, 0.4 mm nozzle (right on H2D), AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, etc. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
+Defaults: plate 1, 0.4 mm nozzle (left or right on H2D), AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, `--tray 5` for B2, etc. Prints are registered in Bambu Handy / Studio cloud printing history by default via `bambu_network_start_local_print_with_record`; add `--no-cloud-record` to send a raw LAN MQTT `project_file` command without creating a cloud task. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
 
 `--json` gives machine-readable output; `watch` emits one JSON object per line. `--report reports/result.json` saves the latest result. Reports exclude access codes and tokens, but may contain job names, file paths, materials, and (for `printers`) saved printer serials. Review them before sharing.
 

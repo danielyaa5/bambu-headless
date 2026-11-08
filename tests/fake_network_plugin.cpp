@@ -15,9 +15,12 @@ static void status(const std::string &state, const std::string &job="fixture.gco
 extern "C" {
 std::string bambu_network_get_version() { return "02.08.02.60"; }
 void *bambu_network_create_agent(std::string value) { scenario=value; return &scenario; }
+int bambu_network_init_log(void *) { return 0; }
 int bambu_network_set_config_dir(void *, std::string) { return 0; }
 int bambu_network_set_cert_file(void *, std::string, std::string) { return 0; }
 int bambu_network_set_country_code(void *, std::string) { return 0; }
+int bambu_network_set_get_country_code_fn(void *, BBL::GetCountryCodeFn) { return 0; }
+int bambu_network_set_extra_http_header(void *, std::map<std::string, std::string>) { return 0; }
 int bambu_network_set_on_local_connect_fn(void *, BBL::OnLocalConnectedFn fn) { connected=fn; return 0; }
 int bambu_network_set_on_printer_connected_fn(void *, BBL::OnPrinterConnectedFn) { return 0; }
 int bambu_network_set_on_local_message_fn(void *, BBL::OnMessageFn fn) { message=fn; return 0; }
@@ -51,7 +54,7 @@ int bambu_network_send_message_to_printer(void *, std::string, std::string paylo
             }})");
             return 0;
         }
-        if(scenario=="start"||scenario=="bed_temp")status("FINISH","old.gcode");
+        if(scenario=="start"||scenario=="start-record"||scenario=="bed_temp")status("FINISH","old.gcode");
         else if(scenario=="resume")status("PAUSE");
         else if(scenario=="resume-error")status("PAUSE","fixture.gcode",123);
         else status("RUNNING");
@@ -75,6 +78,21 @@ int bambu_network_send_message_to_printer(void *, std::string, std::string paylo
     }
     message("TEST_PRINTER","{\"print\":{\"command\":\""+command+"\",\"sequence_id\":\"42\",\"result\":\"SUCCESS\",\"err_code\":0}}");
     status(command=="pause"?"PAUSE":command=="resume"?"RUNNING":command=="project_file"?"PREPARE":"FAILED");
+    return 0;
+}
+int bambu_network_get_user_tasks(void *, BBL::TaskQueryParams q, std::string *body) {
+    if(scenario=="history-fail")return -1;
+    *body="{\"total\":1,\"hits\":[{\"id\":9001,\"title\":\"fixture.gcode\",\"status\":2,\"startTime\":\"2026-11-07T00:00:00Z\",\"endTime\":\"2026-11-07T00:10:00Z\",\"weight\":5.5,\"length\":180,\"costTime\":600,\"mode\":\"lan_file\",\"deviceModel\":\"H2D\",\"deviceName\":\"3DP\",\"plateIndex\":1,\"bedType\":\"textured_plate\",\"failedType\":0,\"secretToken\":\"DO_NOT_LEAK\",\"amsDetailMapping\":[{\"ams\":5,\"filamentId\":\"GFB99\",\"filamentType\":\"ABS\",\"nozzleId\":1,\"sourceColor\":\"F98C36FF\",\"targetColor\":\"F98C36FF\",\"weight\":5.5,\"extraSecret\":\"NO\"}]}]}";
+    return q.limit>0?0:-1;
+}
+int bambu_network_start_local_print_with_record(void *, BBL::PrintParams params, BBL::OnUpdateStatusFn update_fn, BBL::WasCancelledFn cancel_fn, BBL::OnWaitFn wait_fn) {
+    if(params.project_name.empty()||params.task_name.empty()||params.config_filename.empty())return -2010;
+    if(update_fn)update_fn(BBL::PrintingStageCreate,0,"");
+    if(cancel_fn&&cancel_fn())return -18;
+    if(update_fn)update_fn(BBL::PrintingStageRecord,0,"");
+    status("PREPARE",params.project_name);
+    if(wait_fn&&!wait_fn(BBL::PrintingStageWaitPrinter,"{\"job_id\":777001,\"wait_time\":30}"))
+        return BAMBU_NETWORK_ERR_PRINT_SP_WAIT_PRINTER_FAILED;
     return 0;
 }
 }
