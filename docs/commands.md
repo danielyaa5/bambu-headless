@@ -17,9 +17,12 @@ python3 bambu.py status
 python3 bambu.py status --json
 python3 bambu.py inspect part.gcode.3mf
 python3 bambu.py check part.gcode.3mf --tray 1
+python3 bambu.py check statue.gcode.3mf --ams-map B3,B1,B2,A4,A2,A1,B4,A3
 ```
 
-`printers` discovers saved identities in Studio's two access-code maps. It reveals serials, not code values. It does not scan the network or infer an address. `history` fetches your recent Bambu Handy / Studio cloud print task records using your signed-in Bambu Studio session without opening a printer LAN connection. `inspect` is offline; `check` verifies the live printer's identity/model and compares the slice with a fresh idle state, AMS material and nozzle diameter. Supported slices target H2D (right nozzle with AMS 0 trays 0–3, or left nozzle with AMS 1 trays 4–7) or P1S, use a 0.4 mm nozzle, and contain one used filament with slice ID 1. Unused project filament presets are allowed on P1S when mapped to its single extruder.
+`printers` discovers saved identities in Studio's two access-code maps. It reveals serials, not code values. It does not scan the network or infer an address. `history` fetches your recent Bambu Handy / Studio cloud print task records using your signed-in Bambu Studio session without opening a printer LAN connection. `inspect` is offline; `check` verifies the live printer's identity/model and compares the slice with a fresh idle state, AMS material and nozzle diameter. Supported slices target H2D (right nozzle with AMS 0 trays 0–3, or left nozzle with AMS 1 trays 4–7) or P1S and use a 0.4 mm nozzle. They contain one used filament with slice ID 1 (select it with `--tray`), or several used filaments mapped with `--ams-map`. Unused project filament presets are allowed on P1S when mapped to its single extruder.
+
+`--ams-map` takes one slot per used filament, in filament order, as `A1`..`D4` or tray numbers `0`..`15`. For every filament, `check` and `print` require the slot to be loaded with the filament's material, to report the filament's sliced colour (`--allow-color-mismatch` relaxes only this), and on H2D to be on the AMS that feeds the filament's sliced nozzle; a slot may not appear twice. The mapping is sent the way Studio sends it: per project filament, a tray number, an `{ams_id, slot_id}` pair and a nozzle id, with `-1` / `255` for project filaments the plate does not use. A plate sliced by the Studio CLI often has an empty plate `printer_model_id`; the project's printer model is used then.
 
 `status` works while printing and needs no local file. Human output includes the job, progress, layer, remaining time, bed temperature, AMS trays and nozzle configuration. JSON also retains the printer's reported generic nozzle-temperature fields without assuming which side they represent.
 
@@ -68,6 +71,7 @@ Local per-printer locks coordinate this account's commands only. Another client 
 
 ```sh
 python3 bambu.py print part.gcode.3mf --tray 1
+python3 bambu.py print statue.gcode.3mf --ams-map B3,B1,B2,A4,A2,A1,B4,A3
 python3 bambu.py pause --job part.gcode --yes
 python3 bambu.py resume --job part.gcode --yes
 python3 bambu.py cancel --job part.gcode --yes

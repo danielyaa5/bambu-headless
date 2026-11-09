@@ -1,8 +1,8 @@
 # bambu-headless
 
-Manage files, follow jobs and start a single-filament sliced print on a Bambu Lab H2D or P1S from a terminal, with **Cloud/Handy still enabled** and **Developer Mode off**. Bambu Studio does not need to be running.
+Manage files, follow jobs and start a sliced print on a Bambu Lab H2D or P1S from a terminal, with **Cloud/Handy still enabled** and **Developer Mode off**. Bambu Studio does not need to be running.
 
-Experimental Linux x86-64 support is available through [Docker Compose](docs/linux-docker.md). Both platforms use the same C++ bridge. Slice submission supports a 0.4 mm nozzle, one filament (slice filament ID 1), and AMS feeding; H2D slices must use the right nozzle.
+Experimental Linux x86-64 support is available through [Docker Compose](docs/linux-docker.md). Both platforms use the same C++ bridge. Slice submission supports a 0.4 mm nozzle and AMS feeding: one filament (slice filament ID 1) with `--tray`, or a multi-filament plate with `--ams-map`, one AMS slot per filament. On H2D, AMS 0 feeds the right nozzle and AMS 1 the left.
 
 This is an experimental open-source wrapper around **Bambu's installed proprietary networking plugin**. It is not an official Bambu CLI or an independent replacement for that plugin. A small process-local shim changes the executable-path lookup used by the plugin's signed-host check. See [how it works](docs/how-it-works.md) before using it.
 
@@ -17,7 +17,7 @@ This is an experimental open-source wrapper around **Bambu's installed proprieta
 | Account | Existing signed-in Studio configuration, US region |
 | Result | Matching job reached `PREPARE`; independent logger observed `RUNNING`, later `FINISH` at 100% |
 
-The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Linux/P1S validation includes print submission, layer progress, pause, resume, cancel, and bed-target control. Other configurations, Intel Macs, regions, external spools, dual-material prints and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. The P1S test was deliberately canceled after verifying resume; natural completion was not tested.
+The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Linux/P1S validation includes print submission, layer progress, pause, resume, cancel, and bed-target control. Multi-filament submission with `--ams-map` was exercised once on H2D (8 filaments on both nozzles from two AMS units, November 8, 2026): the live check passed and the job was confirmed in `PREPARE`. It has not been followed to completion. Other configurations, Intel Macs, regions, external spools and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. The P1S test was deliberately canceled after verifying resume; natural completion was not tested.
 
 ## Requirements
 
@@ -73,7 +73,7 @@ After checking that the plate is clear and the intended material is loaded:
 python3 bambu.py print part.gcode.3mf --host printer.example
 ```
 
-Defaults: plate 1, 0.4 mm nozzle (left or right on H2D), AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, `--tray 5` for B2, etc. Prints are registered in Bambu Handy / Studio cloud printing history by default via `bambu_network_start_local_print_with_record`; add `--no-cloud-record` to send a raw LAN MQTT `project_file` command without creating a cloud task. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
+Defaults: plate 1, 0.4 mm nozzle (left or right on H2D), AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, `--tray 5` for B2, etc. A plate with several filaments needs `--ams-map` with one slot per filament in filament order, for example `--ams-map B3,B1,B2,A4,A2,A1,B4,A3`; each slot must hold that filament's material and reported colour on the AMS feeding the filament's sliced nozzle, or nothing is uploaded (`--allow-color-mismatch` relaxes only the colour check). Prints are registered in Bambu Handy / Studio cloud printing history by default via `bambu_network_start_local_print_with_record`; add `--no-cloud-record` to send a raw LAN MQTT `project_file` command without creating a cloud task. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
 
 `--json` gives machine-readable output; `watch` emits one JSON object per line. `--report reports/result.json` saves the latest result. Reports exclude access codes and tokens, but may contain job names, file paths, materials, and (for `printers`) saved printer serials. Review them before sharing.
 

@@ -245,6 +245,15 @@ class CLITests(unittest.TestCase):
             with mock.patch.object(core,'main',return_value=0) as legacy:
                 bambu.main(['print','fixture.gcode.3mf','--host','printer.example',*flags])
                 self.assertEqual('--no-timelapse' in legacy.call_args.args[0],forwarded)
+    def test_print_forwards_ams_map_and_colour_override_only_when_given(self):
+        for flags,expect_map,expect_override in [([],False,False),(['--ams-map','B3,A1'],True,False),
+                                                  (['--ams-map','B3,A1','--allow-color-mismatch'],True,True)]:
+            with mock.patch.object(core,'main',return_value=0) as legacy:
+                bambu.main(['print','fixture.gcode.3mf','--host','printer.example',*flags])
+                argv=legacy.call_args.args[0]
+                self.assertEqual('--ams-map' in argv,expect_map)
+                if expect_map: self.assertEqual(argv[argv.index('--ams-map')+1],'B3,A1')
+                self.assertEqual('--allow-color-mismatch' in argv,expect_override)
     def test_file_listing_json_is_parseable_and_terminal_text_escaped(self):
         listing=[{'path':'/file.gcode.3mf','name':'file.gcode.3mf','bytes':3,'type':'file'}]
         with mock.patch.object(core,'load_connection',return_value={}),mock.patch.object(core,'printer_lock',return_value=nullcontext()),mock.patch.object(files,'list_files',return_value=listing),redirect_stdout(io.StringIO()) as out:

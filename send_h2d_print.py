@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Upload and start a single-material H2D/P1S sliced 3MF headlessly.
+"""Upload and start an H2D/P1S sliced 3MF headlessly.
+
+A single-material plate uses --tray. A plate with several filaments needs --ams-map,
+one AMS slot per filament in filament order (for example B3,B1,B2,A4); every slot is
+checked live for material, colour and the nozzle its AMS feeds before anything starts.
 
 Default: validate the file and read fresh printer status only. --start explicitly
 uploads and submits once. Uses the installed, unmodified Bambu networking plugin
@@ -72,38 +76,67 @@ def inspect_file(path: Path, plate: int = 1) -> dict:
             p = selected[0]
             metadata = {m.get('key'): m.get('value') for m in p.findall('metadata')}
             filaments = p.findall('filament')
-            if len(filaments) != 1 or filaments[0].get('id') != '1':
-                raise SendError('This sender supports one physical filament (slot 1) per plate.')
+            multi = len(filaments) > 1
+            if not filaments or (not multi and filaments[0].get('id') != '1'):
+                raise SendError('This sender supports one physical filament (slot 1) per plate, or several with --ams-map.')
             model = settings.get('printer_model')
             if model not in MODEL_IDS:
                 raise SendError('The sliced file must target Bambu Lab H2D or P1S.')
-            if metadata.get('printer_model_id', MODEL_IDS[model]) != MODEL_IDS[model]:
+            # The Studio CLI writes an empty plate printer_model_id; only a recorded, different model is a disagreement.
+            if (metadata.get('printer_model_id') or MODEL_IDS[model]) != MODEL_IDS[model]:
                 raise SendError('Plate and project printer models disagree.')
+            maps = (metadata.get('filament_maps') or '').split()
             if model == 'Bambu Lab H2D':
                 fmap = metadata.get('filament_maps')
-                if fmap not in ('1', '2'):
+                if multi:
+                    if not maps or any(m not in ('1', '2') for m in maps):
+                        raise SendError('Every H2D filament must map to the left (1) or right (2) nozzle; recheck the sliced nozzle mapping.')
+                    hw_nozzle_id = None
+                elif fmap not in ('1', '2'):
                     raise SendError('This sender supports a single H2D nozzle (left=1 or right=2); recheck the sliced nozzle mapping.')
-                hw_nozzle_id = 0 if fmap == '2' else 1
-            elif not metadata.get('filament_maps') or set(metadata['filament_maps'].split()) != {'1'}:
+                else:
+                    hw_nozzle_id = 0 if fmap == '2' else 1
+            elif not maps or set(maps) != {'1'}:
                 raise SendError('P1S slices must map all filament presets to the single extruder.')
             else:
                 fmap = '1'
                 hw_nozzle_id = 0
+            filament_list = []
+            for f in filaments:
+                fid = int(f.get('id', ''))
+                if float(f.get('nozzle_diameter', '')) != 0.4:
+                    raise SendError('This sender supports a 0.4 mm nozzle only.')
+                if not multi:
+                    hw = hw_nozzle_id
+                elif model == 'Bambu Lab H2D':
+                    if not 1 <= fid <= len(maps):
+                        raise SendError('A filament has no nozzle in the sliced filament map.')
+                    hw = 0 if maps[fid - 1] == '2' else 1
+                else:
+                    hw = 0
+                filament_list.append(dict(id=fid, type=f.get('type'), tray_info_idx=f.get('tray_info_idx'),
+                                          color=f.get('color'), grams=float(f.get('used_g') or 0), hw_nozzle_id=hw))
+            if len({f['id'] for f in filament_list}) != len(filament_list):
+                raise SendError('The plate lists the same filament twice.')
             nozzle = filaments[0].get('nozzle_diameter', '')
             if float(nozzle) != 0.4:
                 raise SendError('This sender supports a 0.4 mm nozzle only.')
-            material = filaments[0].get('type')
+            material = filaments[0].get('type') if not multi else 'MULTI'
             bed_type = settings.get('curr_bed_type')
             bed_types = {'High Temp Plate': 'hot_plate', 'Textured PEI Plate': 'textured_plate', 'Cool Plate': 'cool_plate', 'Engineering Plate': 'eng_plate', 'SuperTack Plate': 'supertack_plate'}
             if bed_type not in bed_types:
                 raise SendError('Unsupported plate type; do not guess the printer plate code.')
             info = dict(filename=path.name, bytes=len(content), md5=hashlib.md5(content).hexdigest(),
                         gcode_md5=expected, plate=plate, param=gcode_path, material=material,
-                        tray_info_idx=filaments[0].get('tray_info_idx'),
-                        color=filaments[0].get('color'), printer_model=model, model_id=MODEL_IDS[model],
+                        tray_info_idx=None if multi else filaments[0].get('tray_info_idx'),
+                        color=None if multi else filaments[0].get('color'), printer_model=model, model_id=MODEL_IDS[model],
                         filament_maps=fmap, hw_nozzle_id=hw_nozzle_id, nozzle_mm=0.4,
                         bed_type=bed_types[bed_type], layer_height=settings.get('layer_height'),
                         estimated_seconds=int(metadata.get('prediction', 0)), grams=float(metadata.get('weight', 0)))
+            if multi:
+                # Mapping arrays cover every project filament (Studio: one entry per filament preset).
+                info.update(filaments=filament_list, filament_count=max(len(maps), max(f['id'] for f in filament_list)),
+                            filament_nozzles=[0 if m == '2' else 1 for m in maps] if model == 'Bambu Lab H2D' else [0] * len(maps))
             if model == 'Bambu Lab H2D':
                 info['right_nozzle_mm'] = 0.4  # Preserve the existing H2D report field.
             return info
@@ -265,7 +298,86 @@ def create_config_3mf(source_3mf: Path, dst_3mf: Path) -> Path:
             dst.writestr(item, src.read(name))
     return dst_3mf
 
-def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, tray: int, timelapse: bool = True) -> dict:
+def slot_label(tray: int) -> str:
+    return f"{'ABCD'[tray // 4]}{tray % 4 + 1}"
+
+def parse_ams_map(spec: str) -> list[int]:
+    """'B3,B1,A4' or '6,4,3' -> zero-based trays, one per plate filament in filament order."""
+    trays = []
+    for token in (spec or '').split(','):
+        t = token.strip().upper()
+        if re.fullmatch(r'[A-D][1-4]', t):
+            trays.append('ABCD'.index(t[0]) * 4 + int(t[1]) - 1)
+        elif re.fullmatch(r'\d{1,2}', t) and int(t) < 16:
+            trays.append(int(t))
+        else:
+            raise SendError(f'Invalid AMS slot {token.strip()!r} in --ams-map; use A1..D4 or 0..15.')
+    if len(set(trays)) != len(trays):
+        raise SendError('--ams-map repeats a slot; each filament needs its own AMS slot.')
+    return trays
+
+def live_tray(status: dict, tray: int) -> dict:
+    match = [t for t in status.get('trays', []) if str(t.get('ams_id')) == str(tray // 4) and str(t.get('id')) == str(tray % 4)]
+    return match[0] if len(match) == 1 else {}
+
+def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mismatch: bool = False) -> None:
+    """Every filament's slot must hold its material and colour, on the AMS that feeds its nozzle."""
+    if status.get('gcode_state') not in IDLE_STATES:
+        raise SendError(f'Printer is {status.get("gcode_state", "unknown")}; refusing to interrupt an active job.')
+    if status.get('model_id') != info.get('model_id', 'O1D'):
+        raise SendError('Live printer model is unknown or does not match the sliced file.')
+    filaments = info['filaments']
+    if len(trays) != len(filaments):
+        raise SendError(f'--ams-map lists {len(trays)} slots but the plate uses {len(filaments)} filaments (give one per filament, in filament order).')
+    side = {0: 'right', 1: 'left'}
+    problems = []
+    for f, tray in zip(filaments, trays):
+        label = slot_label(tray)
+        if info.get('printer_model') == 'Bambu Lab H2D':
+            feeds = 0 if tray // 4 == 0 else 1
+            if f['hw_nozzle_id'] != feeds:
+                problems.append(f"filament {f['id']} prints on the {side[f['hw_nozzle_id']]} nozzle but {label} feeds the {side[feeds]} one")
+        live = live_tray(status, tray)
+        if not live.get('tray_type'):
+            problems.append(f'{label} is empty or unknown')
+            continue
+        if live['tray_type'] != f['type']:
+            problems.append(f"filament {f['id']} is {f['type']} but {label} holds {live['tray_type']}")
+        want, have = rgba_hex(f.get('color'))[:6], rgba_hex(live.get('tray_color'), fallback='')[:6]
+        if want != have and not allow_color_mismatch:
+            problems.append(f"filament {f['id']} is #{want} but {label} reports #{have or 'no colour'}")
+    if problems:
+        raise SendError('AMS map refused: ' + '; '.join(problems) + '.')
+    for hw in sorted({f['hw_nozzle_id'] for f in filaments}):
+        if info.get('printer_model') == 'Bambu Lab P1S':
+            diameter = status.get('nozzle_diameter')
+        else:
+            nozzles = [n for n in status.get('nozzles', []) if n.get('id') == hw]
+            diameter = nozzles[0].get('diameter') if len(nozzles) == 1 else None
+        try:
+            ok = float(diameter) == 0.4
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            raise SendError('Live nozzle diameter is unknown or does not match the sliced file.')
+
+def mapping_lists(info: dict, trays: list[int]) -> tuple[list, list, list]:
+    """Studio's per-filament arrays: tray ids, {ams_id, slot_id} and nozzle ids; unused filaments get -1 / 255."""
+    by_id = {f['id']: (f, t) for f, t in zip(info['filaments'], trays)}
+    nozzles = info.get('filament_nozzles') or []
+    v0, v1, nozzle_map = [], [], []
+    for fid in range(1, info['filament_count'] + 1):
+        if fid in by_id:
+            f, t = by_id[fid]
+            v0.append(t); v1.append({'ams_id': t // 4, 'slot_id': t % 4}); nozzle_map.append(f['hw_nozzle_id'])
+        else:
+            v0.append(-1); v1.append({'ams_id': 255, 'slot_id': 255})
+            nozzle_map.append(nozzles[fid - 1] if fid - 1 < len(nozzles) else 0)
+    return v0, v1, nozzle_map
+
+def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, tray, timelapse: bool = True) -> dict:
+    if info.get('filaments'):
+        return record_print_params_multi(path, config_3mf, info, status, list(tray), timelapse)
     ams_id, slot_id = tray // 4, tray % 4
     hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
     matching = [t for t in status.get('trays', []) if str(t.get('ams_id')) == str(ams_id) and str(t.get('id')) == str(slot_id)]
@@ -311,16 +423,59 @@ def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, 
         'nozzles_info': json.dumps(nozzles_info, separators=(',', ':')),
     }
 
-def print_payload(info: dict, tray: int, sequence: str, timelapse: bool = True) -> dict:
-    hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
+def record_print_params_multi(path: Path, config_3mf: Path, info: dict, status: dict, trays: list[int], timelapse: bool = True) -> dict:
+    """Studio's local print record for a multi-filament plate (SelectMachineDialog::get_ams_mapping_result)."""
+    v0, v1, nozzle_map = mapping_lists(info, trays)
+    by_id = {f['id']: (f, t) for f, t in zip(info['filaments'], trays)}
+    mapping_info = []
+    for fid in range(1, info['filament_count'] + 1):
+        if fid not in by_id:
+            mapping_info.append({'ams': -1, 'targetColor': '', 'filamentId': '', 'filamentType': ''})
+            continue
+        f, t = by_id[fid]
+        live = live_tray(status, t)
+        source = rgba_hex(f.get('color'))
+        mapping_info.append({'ams': t, 'sourceColor': source, 'targetColor': rgba_hex(live.get('tray_color'), fallback=source),
+                             'filamentId': f.get('tray_info_idx') or live.get('tray_info_idx') or 'GFL99',
+                             'filamentType': f['type'], 'targetFilamentType': '', 'weight': float(f.get('grams', 0.0)),
+                             'nozzleId': f['hw_nozzle_id']})
+    nozzle_by_id = {int(n['id']): n for n in status.get('nozzles', []) if isinstance(n, dict) and 'id' in n}
+    nozzle_ids = (0,) if info.get('printer_model') == 'Bambu Lab P1S' else (1, 0)
+    nozzles_info = [{'id': nid, 'type': nozzle_by_id.get(nid, {}).get('type') or '', 'flowSize': 'standard_flow',
+                     'diameter': float(nozzle_by_id.get(nid, {}).get('diameter', 0.4))} for nid in nozzle_ids]
+    project_stem = info['filename'][:-10] if info['filename'].endswith('.gcode.3mf') else info['filename'][:-4]
+    compact = dict(separators=(',', ':'))
+    return {
+        'task_name': info['filename'][:-4],
+        'project_name': project_stem,
+        'preset_name': '',
+        'filename': str(path),
+        'config_filename': str(config_3mf),
+        'plate_index': int(info['plate']),
+        'print_type': 'from_sdcard_view',
+        'bed_type': info['bed_type'],
+        'timelapse': bool(timelapse),
+        'ams_mapping': json.dumps(v0, **compact),
+        'ams_mapping2': json.dumps(v1, **compact),
+        'ams_mapping_info': json.dumps(mapping_info, **compact),
+        'nozzle_mapping': json.dumps(nozzle_map, **compact),
+        'nozzles_info': json.dumps(nozzles_info, **compact),
+    }
+
+def print_payload(info: dict, tray, sequence: str, timelapse: bool = True) -> dict:
+    if info.get('filaments'):
+        ams_mapping, ams_mapping2, nozzle_mapping = mapping_lists(info, list(tray))
+    else:
+        hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
+        ams_mapping, ams_mapping2, nozzle_mapping = [tray], [{'ams_id': tray // 4, 'slot_id': tray % 4}], [hw_nozzle_id]
     payload = {'print': dict(command='project_file', sequence_id=sequence, param=info['param'],
                           project_id='0', profile_id='0', task_id='0', subtask_id='0',
                           subtask_name=info['filename'][:-4], url='ftp://' + info['filename'],
                           md5='from_sd_card', timelapse=timelapse, bed_type=info['bed_type'],
                           bed_leveling=True, auto_bed_leveling=2, flow_cali=False,
                           vibration_cali=True, layer_inspect=True, use_ams=True,
-                          ams_mapping=[tray], ams_mapping2=[{'ams_id': tray // 4, 'slot_id': tray % 4}],
-                          nozzle_mapping=[hw_nozzle_id], nozzle_offset_cali=0, extrude_cali_flag=0,
+                          ams_mapping=ams_mapping, ams_mapping2=ams_mapping2,
+                          nozzle_mapping=nozzle_mapping, nozzle_offset_cali=0, extrude_cali_flag=0,
                           extrude_cali_manual_mode=-1)}
     if info.get('printer_model') == 'Bambu Lab P1S':
         p = payload['print']
@@ -433,6 +588,8 @@ def main(argv=None) -> int:
     parser.add_argument('--host', required=True, help='Printer LAN address; credentials come from Bambu Studio')
     parser.add_argument('--serial', help='Defaults to the sole printer saved in Bambu Studio')
     parser.add_argument('--tray', type=int, default=1, help='Zero-based AMS tray; 1 = A2 (default)')
+    parser.add_argument('--ams-map', help='Multi-filament plates: one AMS slot per filament in filament order, e.g. B3,B1,B2,A4 (A1..D4 or 0..15)')
+    parser.add_argument('--allow-color-mismatch', action='store_true', help='Accept --ams-map slots whose reported colour differs from the sliced colour')
     parser.add_argument('--plate', type=int, default=1)
     parser.add_argument('--start', action='store_true', help='Upload and submit one print after preflight')
     parser.add_argument('--repeat', action='store_true', help='Explicitly permit another attempt for this file after checking prior outcome')
@@ -445,6 +602,17 @@ def main(argv=None) -> int:
         raise SendError('AMS tray must be between 0 and 15.')
     path = args.file.expanduser().resolve()
     info = inspect_file(path, args.plate)
+    if info.get('filaments'):
+        if not args.ams_map:
+            raise SendError(f"This plate uses {len(info['filaments'])} filaments; pass --ams-map with one AMS slot per filament in filament order (for example A1,B2,...).")
+        args.trays = parse_ams_map(args.ams_map)
+    elif args.ams_map:
+        args.trays = parse_ams_map(args.ams_map)
+        if len(args.trays) != 1:
+            raise SendError('This plate uses one filament; --ams-map must name exactly one slot.')
+        args.tray = args.trays[0]
+    else:
+        args.trays = [args.tray]
     connection = load_connection(args.host, args.serial)
     # Serialize all runs for this printer, including the final fresh-status check.
     with printer_lock(connection) as (cache, printer_key):
@@ -452,14 +620,30 @@ def main(argv=None) -> int:
 
 def run_locked(args, path, info, connection, cache, printer_key) -> int:
     cloud_record = not getattr(args, 'no_cloud_record', False)
-    report = {'file': info, 'ams_tray': args.tray, 'timelapse': not args.no_timelapse,
+    multi = bool(info.get('filaments'))
+    trays = getattr(args, 'trays', None) or [args.tray]
+    selection = trays if multi else args.tray
+    report = {'file': info, 'ams_tray': None if multi else args.tray, 'timelapse': not args.no_timelapse,
               'cloud_record': cloud_record, 'gui_used': False, 'helper_path_shim': True, 'started': False}
-    print(f"File checked: {info['filename']} (Plate {info['plate']}) | {info['printer_model']} | {info['material']} | 0.4 mm | AMS tray {args.tray}", flush=True)
+    if multi:
+        report['ams_map'] = [{'filament': f['id'], 'slot': slot_label(t), 'tray': t, 'type': f['type'], 'color': f.get('color'),
+                              'nozzle': 'left' if f['hw_nozzle_id'] else 'right'} for f, t in zip(info['filaments'], trays)]
+        print(f"File checked: {info['filename']} (Plate {info['plate']}) | {info['printer_model']} | {len(info['filaments'])} filaments | 0.4 mm | "
+              f"AMS map {','.join(slot_label(t) for t in trays)}", flush=True)
+    else:
+        print(f"File checked: {info['filename']} (Plate {info['plate']}) | {info['printer_model']} | {info['material']} | 0.4 mm | AMS tray {args.tray}", flush=True)
     events, rc = bridge_run(connection, 'status', {'expected_model': info['model_id']})
     if rc:
         raise SendError('Live printer connection failed; no print was submitted.')
     status = merged_status(events)
-    preflight(status, info, args.tray)
+    if multi:
+        preflight_multi(status, info, trays, getattr(args, 'allow_color_mismatch', False))
+        for row in report['ams_map']:
+            live = live_tray(status, row['tray'])
+            print(f"  filament {row['filament']} {row['type']} {row['color']} -> {row['slot']} ({live.get('tray_type')} "
+                  f"#{rgba_hex(live.get('tray_color'), fallback='')[:6]}), {row['nozzle']} nozzle", flush=True)
+    else:
+        preflight(status, info, args.tray)
     report['preflight'] = {k: status[k] for k in ('gcode_state', 'subtask_name', 'model_id', 'trays', 'nozzles', 'nozzle_diameter') if k in status}
     print(f"Live preflight passed: {status['gcode_state']}; AMS material and nozzle match.", flush=True)
     if args.sign_probe and not args.start:
@@ -476,7 +660,7 @@ def run_locked(args, path, info, connection, cache, printer_key) -> int:
         report['upload'] = upload_verified(path, info, connection)
         print('Storage: ' + report['upload'] + '.', flush=True)
         sequence = str(20000 + time.time_ns() % 9998)
-        payload = print_payload(info, args.tray, sequence, timelapse=report['timelapse'])
+        payload = print_payload(info, selection, sequence, timelapse=report['timelapse'])
         job_name = payload['print']['subtask_name']
         # Persist BEFORE dispatch. Unknown outcomes must never silently resubmit.
         report.update(submission_attempted=True, submitted_at=time.strftime('%Y-%m-%dT%H:%M:%S%z'))
@@ -487,7 +671,7 @@ def run_locked(args, path, info, connection, cache, printer_key) -> int:
         if cloud_record:
             with tempfile.TemporaryDirectory(prefix='h2d-config-') as cfg_dir:
                 cfg_3mf = create_config_3mf(path, Path(cfg_dir) / 'config.3mf')
-                job_req['record_params'] = record_print_params(path, cfg_3mf, info, status, args.tray, timelapse=report['timelapse'])
+                job_req['record_params'] = record_print_params(path, cfg_3mf, info, status, selection, timelapse=report['timelapse'])
                 events, rc = bridge_run(connection, 'start', job_req)
         else:
             events, rc = bridge_run(connection, 'start', job_req)
