@@ -2,6 +2,8 @@
 
 Manage files, follow jobs and start a sliced print on a Bambu Lab H2D or P1S from a terminal, with **Cloud/Handy still enabled** and **Developer Mode off**. Bambu Studio does not need to be running.
 
+Read the build write-up: **[Bypassing Bambu's MQTT signature check by masquerading as Bambu Studio](https://danielyakobian.com/blog/bambu-headless-cli.html)**.
+
 Experimental Linux x86-64 support is available through [Docker Compose](docs/linux-docker.md). Both platforms use the same C++ bridge. Slice submission supports a 0.4 mm nozzle and AMS feeding: one filament (slice filament ID 1) with `--tray`, or a multi-filament plate with `--ams-map`, one AMS slot per filament. On H2D, AMS 0 feeds the right nozzle and AMS 1 the left.
 
 This is an experimental open-source wrapper around **Bambu's installed proprietary networking plugin**. It is not an official Bambu CLI or an independent replacement for that plugin. A small process-local shim changes the executable-path lookup used by the plugin's signed-host check. See [how it works](docs/how-it-works.md) before using it.
