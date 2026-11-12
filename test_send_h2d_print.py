@@ -24,7 +24,7 @@ class SenderSafetyTests(unittest.TestCase):
         patcher = mock.patch.dict(sender.os.environ, {'XDG_CACHE_HOME': str(Path(self.temp.name) / '.cache')})
         patcher.start()
         self.addCleanup(patcher.stop)
-    def fixture(self, mapping='2', checksum=None, material='PLA', model='Bambu Lab H2D', diameter='0.4', plate_model=None):
+    def fixture(self, mapping='1', checksum=None, material='PLA', model='Bambu Lab H2D', diameter='0.4', plate_model=None):
         gcode = b'; validation fixture only\n'
         with zipfile.ZipFile(self.path, 'w') as z:
             z.writestr('Metadata/project_settings.config', json.dumps({'printer_model':model,'curr_bed_type':'High Temp Plate','layer_height':'0.2'}))
@@ -34,18 +34,20 @@ class SenderSafetyTests(unittest.TestCase):
             z.writestr('Metadata/slice_info.config', f'<config><plate>{model_meta}<metadata key="index" value="1"/><metadata key="filament_maps" value="{mapping}"/><metadata key="prediction" value="10"/><metadata key="weight" value="1"/><filament id="1" type="{material}" nozzle_diameter="{diameter}" color="#FFFFFF"/></plate></config>')
         return sender.inspect_file(self.path)
     def status(self, state='FINISH', material='PLA', diameter=.4):
-        return {'gcode_state':state,'model_id':'O1D','trays':[{'ams_id':'0','id':'1','tray_type':material}],'nozzles':[{'id':0,'diameter':diameter}]}
-    def test_valid_right_nozzle_file_and_a2(self):
-        sender.preflight(self.status(), self.fixture(), 1)
-    def test_valid_left_nozzle_file_and_b2(self):
-        info = self.fixture(mapping='1')
+        return {'gcode_state':state,'model_id':'O1D',
+                'trays':[{'ams_id':'0','id':'1','tray_type':material}],
+                'nozzles':[{'id':0,'diameter':diameter},{'id':1,'diameter':diameter}]}
+    def test_valid_left_nozzle_file_and_a2(self):
+        sender.preflight(self.status(), self.fixture(mapping='1'), 1)
+    def test_valid_right_nozzle_file_and_b2(self):
+        info = self.fixture(mapping='2')
         status = {'gcode_state':'FINISH','model_id':'O1D',
                   'trays':[{'ams_id':'1','id':'1','tray_type':'PLA'}],
                   'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
         sender.preflight(status, info, 5)
         payload = sender.print_payload(info, 5, '22000')['print']
         self.assertEqual(payload['ams_mapping2'], [{'ams_id':1,'slot_id':1}])
-        self.assertEqual(payload['nozzle_mapping'], [1])
+        self.assertEqual(payload['nozzle_mapping'], [0])
     def test_corrupted_embedded_gcode_rejected(self):
         with self.assertRaises(sender.SendError): self.fixture(checksum='0'*32)
     def test_invalid_or_mismatched_nozzle_rejected(self):
@@ -53,9 +55,12 @@ class SenderSafetyTests(unittest.TestCase):
             with self.subTest(mapping=bad_mapping), self.assertRaises(sender.SendError):
                 self.fixture(mapping=bad_mapping)
         with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
-            sender.preflight(self.status(), self.fixture(mapping='2'), 5)
+            sender.preflight(self.status(), self.fixture(mapping='2'), 1)
+        b_status = {'gcode_state':'FINISH','model_id':'O1D',
+                    'trays':[{'ams_id':'1','id':'1','tray_type':'PLA'}],
+                    'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
         with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
-            sender.preflight(self.status(), self.fixture(mapping='1'), 1)
+            sender.preflight(b_status, self.fixture(mapping='1'), 5)
     def test_record_params_builds_studio_local_print_record_schema(self):
         cfg_3mf = Path(self.temp.name) / 'config.3mf'
         right_info = self.fixture(mapping='2')
@@ -63,16 +68,22 @@ class SenderSafetyTests(unittest.TestCase):
         with zipfile.ZipFile(cfg_3mf) as z:
             self.assertIn('Metadata/slice_info.config', z.namelist())
             self.assertNotIn('Metadata/plate_1.gcode', z.namelist())
-        right = sender.record_print_params(self.path, cfg_3mf, right_info, self.status(), 1)
-        self.assertEqual(json.loads(right['ams_mapping']), [1])
-        self.assertEqual(json.loads(right['ams_mapping2']), [{'ams_id':0,'slot_id':1}])
+        b_status = {'gcode_state':'FINISH','model_id':'O1D',
+                    'trays':[{'ams_id':'1','id':'1','tray_type':'PLA'}],
+                    'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        right = sender.record_print_params(self.path, cfg_3mf, right_info, b_status, 5)
+        self.assertEqual(json.loads(right['ams_mapping']), [5])
+        self.assertEqual(json.loads(right['ams_mapping2']), [{'ams_id':1,'slot_id':1}])
         self.assertEqual(json.loads(right['ams_mapping_info'])[0]['nozzleId'], 0)
         self.assertEqual(json.loads(right['nozzle_mapping']), [0])
         left_info = self.fixture(mapping='1')
-        left = sender.record_print_params(self.path, cfg_3mf, left_info, self.status(), 7)
-        self.assertEqual(json.loads(left['ams_mapping']), [7])
-        self.assertEqual(json.loads(left['ams_mapping2']), [{'ams_id':1,'slot_id':3}])
+        left = sender.record_print_params(self.path, cfg_3mf, left_info, self.status(), 1)
+        self.assertEqual(json.loads(left['ams_mapping']), [1])
+        self.assertEqual(json.loads(left['ams_mapping2']), [{'ams_id':0,'slot_id':1}])
         self.assertEqual(json.loads(left['ams_mapping_info'])[0]['nozzleId'], 1)
+        self.assertEqual(json.loads(left['nozzle_mapping']), [1])
+        nozzles = json.loads(left['nozzles_info'])
+        self.assertEqual([n['id'] for n in nozzles], [1, 0])
         self.assertEqual(json.loads(left['nozzle_mapping']), [1])
     def test_busy_and_paused_states_rejected(self):
         info = self.fixture()
@@ -92,10 +103,10 @@ class SenderSafetyTests(unittest.TestCase):
         self.assertEqual(sender.verified_start(events,'new-job')['gcode_state'],'PREPARE')
     def test_publish_ack_alone_is_not_start_confirmation(self):
         self.assertIsNone(sender.verified_start([{'command':'project_file','result':'SUCCESS'}],'new-job'))
-    def test_payload_uses_right_nozzle_and_a2(self):
+    def test_payload_uses_left_nozzle_and_a2(self):
         payload=sender.print_payload(self.fixture(),1,'22000')['print']
         self.assertEqual(payload['ams_mapping2'],[{'ams_id':0,'slot_id':1}])
-        self.assertEqual(payload['nozzle_mapping'],[0])
+        self.assertEqual(payload['nozzle_mapping'],[1])
         self.assertTrue(payload['url'].startswith('ftp://fixture.'))
         self.assertNotIn('gcode',payload)
     def test_payload_records_camera_timelapse_unless_disabled(self):
@@ -232,7 +243,7 @@ class SenderSafetyTests(unittest.TestCase):
 
     # --- multi-filament plates (one --ams-map slot per filament) ---
     COLORS = ['#161616','#4D3324','#4F3F24','#847D48','#AE835B','#D3B7A7','#F72323','#E8DBB7']
-    MAP = 'B3,B1,B2,A4,A2,A1,B4,A3'
+    MAP = 'A3,A1,A2,B4,B2,B1,A4,B3'
     def multi_fixture(self, maps='1 1 1 2 2 2 1 2', ids=range(1, 9), diameter='0.40'):
         gcode = b'; validation fixture only\n'
         fil = ''.join(f'<filament id="{i}" type="PLA" nozzle_diameter="{diameter}" color="{self.COLORS[i-1]}" tray_info_idx="GFL99" used_g="{10+i}"/>' for i in ids)
@@ -243,7 +254,7 @@ class SenderSafetyTests(unittest.TestCase):
             z.writestr('Metadata/slice_info.config', f'<config><plate><metadata key="index" value="1"/><metadata key="filament_maps" value="{maps}"/><metadata key="prediction" value="10"/><metadata key="weight" value="1"/>{fil}</plate></config>')
         return sender.inspect_file(self.path)
     def multi_status(self, colors=None):
-        colors = colors or dict(zip([6,4,5,3,1,0,7,2], [c[1:] for c in self.COLORS]))
+        colors = colors or dict(zip([2,0,1,7,5,4,3,6], [c[1:] for c in self.COLORS]))
         trays = [{'ams_id':str(t//4),'id':str(t%4),'tray_type':'PLA','tray_color':c+'FF','tray_info_idx':'GFL99'} for t,c in colors.items()]
         return {'gcode_state':'FINISH','model_id':'O1D','trays':trays,
                 'nozzles':[{'id':0,'diameter':0.4,'type':'HS01'},{'id':1,'diameter':0.4,'type':'HS01'}]}
@@ -262,7 +273,7 @@ class SenderSafetyTests(unittest.TestCase):
         with self.assertRaises(sender.SendError):
             self.multi_fixture(diameter='0.6')
     def test_parse_ams_map(self):
-        self.assertEqual(sender.parse_ams_map(self.MAP), [6,4,5,3,1,0,7,2])
+        self.assertEqual(sender.parse_ams_map(self.MAP), [2,0,1,7,5,4,3,6])
         self.assertEqual(sender.parse_ams_map(' 0, 15 '), [0,15])
         self.assertEqual([sender.slot_label(t) for t in sender.parse_ams_map(self.MAP)], self.MAP.split(','))
         for bad in ('E1', 'A5', '16', 'A1,A1', '', 'A1,,B2'):
@@ -279,10 +290,10 @@ class SenderSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(sender.SendError, 'reports'):
             sender.preflight_multi(self.multi_status(), info, browns)
         sender.preflight_multi(self.multi_status(), info, browns, allow_color_mismatch=True)
-        status = self.multi_status(); status['trays'][0]['tray_type'] = 'PETG'    # B3, filament 1
+        status = self.multi_status(); status['trays'][0]['tray_type'] = 'PETG'    # A3, filament 1
         with self.assertRaisesRegex(sender.SendError, 'holds PETG'):
             sender.preflight_multi(status, info, trays)
-        status = self.multi_status(); status['trays'] = status['trays'][1:]       # B3 empty
+        status = self.multi_status(); status['trays'] = status['trays'][1:]       # A3 empty
         with self.assertRaisesRegex(sender.SendError, 'empty'):
             sender.preflight_multi(status, info, trays)
         with self.assertRaisesRegex(sender.SendError, 'lists 7 slots'):
@@ -293,26 +304,26 @@ class SenderSafetyTests(unittest.TestCase):
     def test_multi_payload_and_record_use_studio_per_filament_arrays(self):
         info, trays = self.multi_fixture(), sender.parse_ams_map(self.MAP)
         p = sender.print_payload(info, trays, '22000')['print']
-        self.assertEqual(p['ams_mapping'], [6,4,5,3,1,0,7,2])
-        self.assertEqual(p['ams_mapping2'][0], {'ams_id':1,'slot_id':2})
-        self.assertEqual(p['ams_mapping2'][3], {'ams_id':0,'slot_id':3})
+        self.assertEqual(p['ams_mapping'], [2,0,1,7,5,4,3,6])
+        self.assertEqual(p['ams_mapping2'][0], {'ams_id':0,'slot_id':2})
+        self.assertEqual(p['ams_mapping2'][3], {'ams_id':1,'slot_id':3})
         self.assertEqual(p['nozzle_mapping'], [1,1,1,0,0,0,1,0])
         self.assertIs(p['timelapse'], True)
         cfg = Path(self.temp.name) / 'config.3mf'
         sender.create_config_3mf(self.path, cfg)
         r = sender.record_print_params(self.path, cfg, info, self.multi_status(), trays)
-        self.assertEqual(json.loads(r['ams_mapping']), [6,4,5,3,1,0,7,2])
+        self.assertEqual(json.loads(r['ams_mapping']), [2,0,1,7,5,4,3,6])
         infos = json.loads(r['ams_mapping_info'])
         self.assertEqual([i['nozzleId'] for i in infos], [1,1,1,0,0,0,1,0])
-        self.assertEqual([i['ams'] for i in infos], [6,4,5,3,1,0,7,2])
+        self.assertEqual([i['ams'] for i in infos], [2,0,1,7,5,4,3,6])
         self.assertEqual((infos[0]['sourceColor'], infos[0]['targetColor'], infos[6]['sourceColor']), ('161616FF','161616FF','F72323FF'))
         self.assertEqual(json.loads(r['nozzle_mapping']), [1,1,1,0,0,0,1,0])
         self.assertEqual([n['id'] for n in json.loads(r['nozzles_info'])], [1,0])
     def test_unused_project_filament_gets_studio_placeholders(self):
         info = self.multi_fixture(maps='1 2 2', ids=[1, 3])
         self.assertEqual(info['filament_count'], 3)
-        p = sender.print_payload(info, sender.parse_ams_map('B1,A1'), '22000')['print']
-        self.assertEqual(p['ams_mapping'], [4,-1,0])
+        p = sender.print_payload(info, sender.parse_ams_map('A1,B1'), '22000')['print']
+        self.assertEqual(p['ams_mapping'], [0,-1,4])
         self.assertEqual(p['ams_mapping2'][1], {'ams_id':255,'slot_id':255})
         self.assertEqual(p['nozzle_mapping'], [1,0,0])
     def test_multi_filament_needs_ams_map_before_any_connection(self):

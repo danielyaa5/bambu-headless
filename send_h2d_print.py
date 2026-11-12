@@ -266,7 +266,8 @@ def preflight(status: dict, info: dict, tray: int) -> None:
         elif tray == 254:
             expected_hw_nozzle = 1
         else:
-            expected_hw_nozzle = 0 if (tray // 4) == 0 else 1
+            # On H2D, AMS 0 (A1..A4) feeds Left nozzle 1; AMS 1 (B1..B4) feeds Right nozzle 0
+            expected_hw_nozzle = 1 if (tray // 4) == 0 else 0
         if hw_nozzle_id != expected_hw_nozzle:
             slot_desc = "External spool" if tray in (254, 255) else "Selected AMS tray"
             raise SendError(f'{slot_desc} feeds a different H2D nozzle than the sliced file.')
@@ -380,7 +381,8 @@ def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mism
             elif tray == 254:
                 feeds = 1
             else:
-                feeds = 0 if tray // 4 == 0 else 1
+                # On H2D, AMS 0 (A1..A4) feeds Left nozzle 1; AMS 1 (B1..B4) feeds Right nozzle 0
+                feeds = 1 if tray // 4 == 0 else 0
             if f['hw_nozzle_id'] != feeds:
                 problems.append(f"filament {f['id']} prints on the {side[f['hw_nozzle_id']]} nozzle but {label} feeds the {side[feeds]} one")
         live = live_tray(status, tray)
