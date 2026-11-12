@@ -121,15 +121,18 @@ int main(){
         json safe=pick(p,{"command","sequence_id","gcode_state","subtask_name","stg_cur","mc_percent","layer_num","total_layer_num","mc_remaining_time","print_error","result","reason","err_code","bed_temper","bed_target_temper","nozzle_temper","nozzle_target_temper"});
         for(auto key:{"nozzle_diameter","nozzle_type","hms","mc_print_sub_stage","fail_reason","gcode_file","mapping","vir_slot","print_gcode_action","print_real_action","mc_action","mc_stage","mc_print_stage","mc_print_error_code","stg","ams_status","ams_rfid_status","info"})if(p.contains(key))safe[key]=p[key];
         safe["event"]="telemetry";
-        json trays=json::array();
+        json trays=json::array(),ams_units=json::array();
         if(!p["ams"].is_null() && p["ams"]["ams"].is_array()){
             for(auto &a : p["ams"]["ams"]){
+                if(a.contains("info") && a["info"].is_string())
+                    ams_units.push_back({{"id",a.value("id",json(""))},{"info",a["info"]}});
                 for(auto &t : a["tray"]){
                     json tray=pick(t,{"id","tray_type","tray_color","tray_info_idx"});
                     tray["ams_id"]=a.value("id",json(""));trays.push_back(tray);
                 }
             }
         }
+        if(!ams_units.empty())safe["ams_units"]=ams_units;
         if(p.contains("vir_slot") && p["vir_slot"].is_array()){
             for(auto &t : p["vir_slot"]){
                 json tray=pick(t,{"id","tray_type","tray_color","tray_info_idx"});

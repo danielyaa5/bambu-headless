@@ -254,6 +254,28 @@ def merged_status(events: list[dict]) -> dict:
         raise SendError('No fresh MQTT printer status was received.')
     return status
 
+def h2d_tray_nozzle(status: dict, tray: int) -> int:
+    """Return physical H2D nozzle (0=right, 1=left) fed by tray, honoring live ams.ams[].info bits 8..11."""
+    if tray == 255:
+        return 0
+    if tray == 254:
+        return 1
+    ams_id = str(tray // 4)
+    for unit in status.get('ams_units', []):
+        if str(unit.get('id')) == ams_id and unit.get('info'):
+            try:
+                flags = int(str(unit['info']), 16)
+            except ValueError:
+                break
+            nibble = (flags >> 8) & 0xF
+            if nibble in (0, 1):
+                return nibble
+            if nibble == 0xE:
+                switched = (flags >> 24) & 0xF
+                if switched in (0, 1):
+                    return switched
+    return 1 if (tray // 4) == 0 else 0
+
 def preflight(status: dict, info: dict, tray: int) -> None:
     if status.get('gcode_state') not in IDLE_STATES:
         raise SendError(f'Printer is {status.get("gcode_state", "unknown")}; refusing to interrupt an active job.')
@@ -261,13 +283,7 @@ def preflight(status: dict, info: dict, tray: int) -> None:
         raise SendError('Live printer model is unknown or does not match the sliced file.')
     hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
     if info.get('printer_model', 'Bambu Lab H2D') == 'Bambu Lab H2D':
-        if tray == 255:
-            expected_hw_nozzle = 0
-        elif tray == 254:
-            expected_hw_nozzle = 1
-        else:
-            # On H2D, AMS 0 (A1..A4) feeds Left nozzle 1; AMS 1 (B1..B4) feeds Right nozzle 0
-            expected_hw_nozzle = 1 if (tray // 4) == 0 else 0
+        expected_hw_nozzle = h2d_tray_nozzle(status, tray)
         if hw_nozzle_id != expected_hw_nozzle:
             slot_desc = "External spool" if tray in (254, 255) else "Selected AMS tray"
             raise SendError(f'{slot_desc} feeds a different H2D nozzle than the sliced file.')
@@ -376,13 +392,7 @@ def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mism
     for f, tray in zip(filaments, trays):
         label = slot_label(tray, is_h2d=is_h2d)
         if is_h2d:
-            if tray == 255:
-                feeds = 0
-            elif tray == 254:
-                feeds = 1
-            else:
-                # On H2D, AMS 0 (A1..A4) feeds Left nozzle 1; AMS 1 (B1..B4) feeds Right nozzle 0
-                feeds = 1 if tray // 4 == 0 else 0
+            feeds = h2d_tray_nozzle(status, tray)
             if f['hw_nozzle_id'] != feeds:
                 problems.append(f"filament {f['id']} prints on the {side[f['hw_nozzle_id']]} nozzle but {label} feeds the {side[feeds]} one")
         live = live_tray(status, tray)
@@ -409,6 +419,10 @@ def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mism
         if not ok:
             raise SendError('Live nozzle diameter is unknown or does not match the sliced file.')
 
+def tray_ams_slot(tray: int) -> tuple[int, int]:
+    """Studio's (ams_id, slot_id) pair for an active tray (254/0 or 255/0 for external spools; 255/255 is unused)."""
+    return (tray, 0) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
+
 def mapping_lists(info: dict, trays: list[int]) -> tuple[list, list, list]:
     """Studio's per-filament arrays: tray ids, {ams_id, slot_id} and nozzle ids; unused filaments get -1 / 255."""
     by_id = {f['id']: (f, t) for f, t in zip(info['filaments'], trays)}
@@ -418,10 +432,8 @@ def mapping_lists(info: dict, trays: list[int]) -> tuple[list, list, list]:
         if fid in by_id:
             f, t = by_id[fid]
             v0.append(t)
-            if t in EXTERNAL_SLOTS:
-                v1.append({'ams_id': 255, 'slot_id': t})
-            else:
-                v1.append({'ams_id': t // 4, 'slot_id': t % 4})
+            ams_id, slot_id = tray_ams_slot(t)
+            v1.append({'ams_id': ams_id, 'slot_id': slot_id})
             nozzle_map.append(f['hw_nozzle_id'])
         else:
             v0.append(-1); v1.append({'ams_id': 255, 'slot_id': 255})
@@ -431,7 +443,7 @@ def mapping_lists(info: dict, trays: list[int]) -> tuple[list, list, list]:
 def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, tray, timelapse: bool = True) -> dict:
     if info.get('filaments'):
         return record_print_params_multi(path, config_3mf, info, status, list(tray), timelapse)
-    ams_id, slot_id = (255, tray) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
+    ams_id, slot_id = tray_ams_slot(tray)
     hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
     tray_info = live_tray(status, tray)
     source_color = rgba_hex(info.get('color'))
@@ -530,7 +542,7 @@ def print_payload(info: dict, tray, sequence: str, timelapse: bool = True) -> di
         use_ams = True if is_h2d else any(t < 16 for t in trays)
     else:
         hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
-        ams_id, slot_id = (255, tray) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
+        ams_id, slot_id = tray_ams_slot(tray)
         ams_mapping, ams_mapping2, nozzle_mapping = [tray], [{'ams_id': ams_id, 'slot_id': slot_id}], [hw_nozzle_id]
         use_ams = True if is_h2d else (tray < 16)
     payload = {'print': dict(command='project_file', sequence_id=sequence, param=info['param'],

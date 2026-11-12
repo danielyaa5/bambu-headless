@@ -118,7 +118,7 @@ class NativeBridgeTests(unittest.TestCase):
              'record_params':{'task_name':'fixture.gcode','project_name':'fixture','filename':'/tmp/a.3mf',
                               'config_filename':'/tmp/c.3mf','plate_index':1,'bed_type':'textured_plate',
                               'use_ams':False,
-                              'ams_mapping':'[255]','ams_mapping2':'[{"ams_id":255,"slot_id":255}]',
+                              'ams_mapping':'[255]','ams_mapping2':'[{"ams_id":255,"slot_id":0}]',
                               'ams_mapping_info':'[{"ams":255}]','nozzle_mapping':'[0]','nozzles_info':'[{"id":0}]'}}
         result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
         events=[json.loads(line) for line in result.stdout.splitlines()]

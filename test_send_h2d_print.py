@@ -146,14 +146,14 @@ class SenderSafetyTests(unittest.TestCase):
         payload = sender.print_payload(info, 255, '22000')['print']
         self.assertTrue(payload['use_ams'])
         self.assertEqual(payload['ams_mapping'], [255])
-        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':255}])
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':0}])
         self.assertEqual(payload['nozzle_mapping'], [0])
         cfg_3mf = Path(self.temp.name) / 'config.3mf'
         sender.create_config_3mf(self.path, cfg_3mf)
         r = sender.record_print_params(self.path, cfg_3mf, info, status, 255)
         self.assertTrue(r['use_ams'])
         self.assertEqual(json.loads(r['ams_mapping']), [255])
-        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':255}])
+        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':0}])
         mapping_info = json.loads(r['ams_mapping_info'])
         self.assertEqual(mapping_info[0]['ams'], 255)
         self.assertEqual(mapping_info[0]['nozzleId'], 0)
@@ -169,14 +169,14 @@ class SenderSafetyTests(unittest.TestCase):
         payload = sender.print_payload(info, 254, '22000')['print']
         self.assertTrue(payload['use_ams'])
         self.assertEqual(payload['ams_mapping'], [254])
-        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':254}])
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':254,'slot_id':0}])
         self.assertEqual(payload['nozzle_mapping'], [1])
         cfg_3mf = Path(self.temp.name) / 'config.3mf'
         sender.create_config_3mf(self.path, cfg_3mf)
         r = sender.record_print_params(self.path, cfg_3mf, info, status, 254)
         self.assertTrue(r['use_ams'])
         self.assertEqual(json.loads(r['ams_mapping']), [254])
-        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':254}])
+        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':254,'slot_id':0}])
         mapping_info = json.loads(r['ams_mapping_info'])
         self.assertEqual(mapping_info[0]['ams'], 254)
         self.assertEqual(mapping_info[0]['nozzleId'], 1)
@@ -342,13 +342,53 @@ class SenderSafetyTests(unittest.TestCase):
         self.assertEqual(trays[7], 255)
         p = sender.print_payload(info, trays, '22000')['print']
         self.assertTrue(p['use_ams'])
-        self.assertEqual(p['ams_mapping2'][0], {'ams_id':255,'slot_id':254})
-        self.assertEqual(p['ams_mapping2'][7], {'ams_id':255,'slot_id':255})
+        self.assertEqual(p['ams_mapping2'][0], {'ams_id':254,'slot_id':0})
+        self.assertEqual(p['ams_mapping2'][7], {'ams_id':255,'slot_id':0})
         pure_ext_info = self.multi_fixture(maps='1 2', ids=[1, 2])
         pure_ext_trays = sender.parse_ams_map('ext-l,ext-r', filaments=pure_ext_info['filaments'])
         pure_p = sender.print_payload(pure_ext_info, pure_ext_trays, '22000')['print']
         self.assertTrue(pure_p['use_ams'])
         self.assertEqual(pure_p['ams_mapping'], [254, 255])
+        self.assertEqual(pure_p['ams_mapping2'], [{'ams_id':254,'slot_id':0},{'ams_id':255,'slot_id':0}])
+
+    def test_external_spool_ams_mapping2_never_collides_with_unmapped_placeholder(self):
+        # Firmware packs (ams_id << 8) | slot_id: 254/0 = 65024 (Ext-L), 255/0 = 65280 (Ext-R), 255/255 = 65535 (unmapped).
+        gcode = b'; dual tpu pla fixture\n'
+        with zipfile.ZipFile(self.path, 'w') as z:
+            z.writestr('Metadata/project_settings.config', json.dumps({'printer_model':'Bambu Lab H2D','curr_bed_type':'Textured PEI Plate','layer_height':'0.16'}))
+            z.writestr('Metadata/plate_1.gcode', gcode)
+            z.writestr('Metadata/plate_1.gcode.md5', hashlib.md5(gcode).hexdigest())
+            z.writestr('Metadata/slice_info.config',
+                       '<config><plate><metadata key="printer_model_id" value="O1D"/><metadata key="index" value="1"/>'
+                       '<metadata key="filament_maps" value="2 1 1"/><metadata key="prediction" value="100"/><metadata key="weight" value="40"/>'
+                       '<filament id="1" type="TPU" nozzle_diameter="0.40" color="#F98C36" tray_info_idx="GFU99" used_g="38"/>'
+                       '<filament id="2" type="PLA" nozzle_diameter="0.40" color="#F72323" tray_info_idx="GFL99" used_g="2"/></plate></config>')
+        info = sender.inspect_file(self.path)
+        trays = sender.parse_ams_map('ext-r,A3', filaments=info['filaments'])
+        self.assertEqual(trays, [255, 2])
+        status = {'gcode_state':'FINISH','model_id':'O1D',
+                  'ams_units':[{'id':'0','info':'51001103'}],
+                  'trays':[{'ams_id':'0','id':'2','tray_type':'PLA','tray_color':'F72323FF','tray_info_idx':'GFL99'},
+                           {'ams_id':'255','id':'255','tray_type':'TPU','tray_color':'F98C36FF','tray_info_idx':'GFU99'}],
+                  'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        sender.preflight_multi(status, info, trays)
+        p = sender.print_payload(info, trays, '22000')['print']
+        self.assertEqual(p['ams_mapping'], [255, 2, -1])
+        self.assertEqual(p['ams_mapping2'], [{'ams_id':255,'slot_id':0}, {'ams_id':0,'slot_id':2}, {'ams_id':255,'slot_id':255}])
+        self.assertEqual(p['nozzle_mapping'], [0, 1, 1])
+
+    def test_h2d_ams_info_dynamically_resolves_fed_nozzle(self):
+        left_info = self.fixture(mapping='1', material='PLA')
+        right_info = self.fixture(mapping='2', material='PLA')
+        base_status = {'gcode_state':'FINISH','model_id':'O1D',
+                       'trays':[{'ams_id':'0','id':'2','tray_type':'PLA','tray_color':'FFFFFFFF'}],
+                       'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        sender.preflight(base_status | {'ams_units':[{'id':'0','info':'51001103'}]}, left_info, 2)
+        with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
+            sender.preflight(base_status | {'ams_units':[{'id':'0','info':'51001103'}]}, right_info, 2)
+        sender.preflight(base_status | {'ams_units':[{'id':'0','info':'10001003'}]}, right_info, 2)
+        with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
+            sender.preflight(base_status | {'ams_units':[{'id':'0','info':'10001003'}]}, left_info, 2)
 
     def run_cli(self, *flags, outcome=None, state='FINISH'):
         connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}
