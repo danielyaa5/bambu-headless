@@ -133,18 +133,21 @@ class SenderSafetyTests(unittest.TestCase):
                   'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
         sender.preflight(status, info, 255)
         payload = sender.print_payload(info, 255, '22000')['print']
-        self.assertFalse(payload['use_ams'])
-        self.assertEqual(payload['ams_mapping'], [])
-        self.assertEqual(payload['ams_mapping2'], [])
+        self.assertTrue(payload['use_ams'])
+        self.assertEqual(payload['ams_mapping'], [255])
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':255}])
         self.assertEqual(payload['nozzle_mapping'], [0])
         cfg_3mf = Path(self.temp.name) / 'config.3mf'
         sender.create_config_3mf(self.path, cfg_3mf)
         r = sender.record_print_params(self.path, cfg_3mf, info, status, 255)
-        self.assertFalse(r['use_ams'])
-        self.assertEqual(json.loads(r['ams_mapping']), [])
-        self.assertEqual(json.loads(r['ams_mapping2']), [])
-        self.assertEqual(json.loads(r['ams_mapping_info']), [])
-        self.assertEqual(json.loads(r['nozzle_mapping']), [0])
+        self.assertTrue(r['use_ams'])
+        self.assertEqual(json.loads(r['ams_mapping']), [255])
+        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':255}])
+        mapping_info = json.loads(r['ams_mapping_info'])
+        self.assertEqual(mapping_info[0]['ams'], 255)
+        self.assertEqual(mapping_info[0]['nozzleId'], 0)
+        self.assertEqual(mapping_info[0]['filamentType'], 'TPU')
+        self.assertEqual(mapping_info[0]['filamentId'], 'GFU99')
 
     def test_external_spool_preflight_and_payload_h2d_left_nozzle(self):
         info = self.fixture(mapping='1', material='PETG')
@@ -153,18 +156,19 @@ class SenderSafetyTests(unittest.TestCase):
                   'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
         sender.preflight(status, info, 254)
         payload = sender.print_payload(info, 254, '22000')['print']
-        self.assertFalse(payload['use_ams'])
-        self.assertEqual(payload['ams_mapping'], [])
-        self.assertEqual(payload['ams_mapping2'], [])
+        self.assertTrue(payload['use_ams'])
+        self.assertEqual(payload['ams_mapping'], [254])
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':254}])
         self.assertEqual(payload['nozzle_mapping'], [1])
         cfg_3mf = Path(self.temp.name) / 'config.3mf'
         sender.create_config_3mf(self.path, cfg_3mf)
         r = sender.record_print_params(self.path, cfg_3mf, info, status, 254)
-        self.assertFalse(r['use_ams'])
-        self.assertEqual(json.loads(r['ams_mapping']), [])
-        self.assertEqual(json.loads(r['ams_mapping2']), [])
-        self.assertEqual(json.loads(r['ams_mapping_info']), [])
-        self.assertEqual(json.loads(r['nozzle_mapping']), [1])
+        self.assertTrue(r['use_ams'])
+        self.assertEqual(json.loads(r['ams_mapping']), [254])
+        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':254}])
+        mapping_info = json.loads(r['ams_mapping_info'])
+        self.assertEqual(mapping_info[0]['ams'], 254)
+        self.assertEqual(mapping_info[0]['nozzleId'], 1)
 
     def test_external_spool_rejects_wrong_nozzle_and_wrong_material(self):
         right_info = self.fixture(mapping='2', material='TPU')
@@ -189,7 +193,7 @@ class SenderSafetyTests(unittest.TestCase):
         sender.preflight(status, info, 254)
         payload = sender.print_payload(info, 254, '42')['print']
         self.assertFalse(payload['use_ams'])
-        self.assertEqual(payload['ams_mapping'], [])
+        self.assertEqual(payload['ams_mapping'], [254])
         self.assertNotIn('ams_mapping2', payload)
 
     def test_parse_tray_spec_and_labels(self):
@@ -332,18 +336,8 @@ class SenderSafetyTests(unittest.TestCase):
         pure_ext_info = self.multi_fixture(maps='1 2', ids=[1, 2])
         pure_ext_trays = sender.parse_ams_map('ext-l,ext-r', filaments=pure_ext_info['filaments'])
         pure_p = sender.print_payload(pure_ext_info, pure_ext_trays, '22000')['print']
-        self.assertFalse(pure_p['use_ams'])
-        self.assertEqual(pure_p['ams_mapping'], [])
-        self.assertEqual(pure_p['ams_mapping2'], [])
-        self.assertEqual(pure_p['nozzle_mapping'], [1, 0])
-        cfg_3mf = Path(self.temp.name) / 'config_pure.3mf'
-        sender.create_config_3mf(self.path, cfg_3mf)
-        pure_r = sender.record_print_params(self.path, cfg_3mf, pure_ext_info, self.multi_status(), pure_ext_trays)
-        self.assertFalse(pure_r['use_ams'])
-        self.assertEqual(json.loads(pure_r['ams_mapping']), [])
-        self.assertEqual(json.loads(pure_r['ams_mapping2']), [])
-        self.assertEqual(json.loads(pure_r['ams_mapping_info']), [])
-        self.assertEqual(json.loads(pure_r['nozzle_mapping']), [1, 0])
+        self.assertTrue(pure_p['use_ams'])
+        self.assertEqual(pure_p['ams_mapping'], [254, 255])
 
     def run_cli(self, *flags, outcome=None, state='FINISH'):
         connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}

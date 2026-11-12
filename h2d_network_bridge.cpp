@@ -119,7 +119,7 @@ int main(){
         }
         if(!p.is_object())return;
         json safe=pick(p,{"command","sequence_id","gcode_state","subtask_name","stg_cur","mc_percent","layer_num","total_layer_num","mc_remaining_time","print_error","result","reason","err_code","bed_temper","bed_target_temper","nozzle_temper","nozzle_target_temper"});
-        for(auto key:{"nozzle_diameter","nozzle_type"})if(p.contains(key))safe[key]=p[key];
+        for(auto key:{"nozzle_diameter","nozzle_type","hms","mc_print_sub_stage","fail_reason","gcode_file","mapping","vir_slot","print_gcode_action","print_real_action","mc_action","mc_stage","mc_print_stage","mc_print_error_code","stg","ams_status","ams_rfid_status","info"})if(p.contains(key))safe[key]=p[key];
         safe["event"]="telemetry";
         json trays=json::array();
         if(!p["ams"].is_null() && p["ams"]["ams"].is_array()){
@@ -274,10 +274,11 @@ int main(){
         payload=str(cfg,"payload");
         json p=parse(payload)["print"];
         if(expected.empty()||str(p,"command")!=control||str(p,"sequence_id")!=sequence||str(p,"param")!="")_exit(3);
+        const bool force=cfg.value("force",false);
         {
             std::lock_guard<std::mutex> lock(state_mutex);
             bool allowed=(control=="pause"&&current_state=="RUNNING")||
-                (control=="resume"&&current_state=="PAUSE"&&error_known&&current_error==0)||
+                (control=="resume"&&current_state=="PAUSE"&&(force||(error_known&&current_error==0)))||
                 (control=="stop"&&(current_state=="PREPARE"||current_state=="RUNNING"||current_state=="PAUSE"));
             if(current_job!=expected||!allowed){
                 emit({{"event","error"},{"message","Job or state changed; control refused"}});_exit(5);

@@ -186,6 +186,7 @@ class CLITests(unittest.TestCase):
             with self.assertRaises(core.SendError): bambu.control_preflight(self.status(state),command,job)
         for error in (123,None):
             with self.assertRaises(core.SendError): bambu.control_preflight(self.status('PAUSE')|{'print_error':error},'resume','fixture.gcode')
+        bambu.control_preflight(self.status('PAUSE')|{'print_error':123},'resume','fixture.gcode',force=True)
         bambu.control_preflight(self.status(),'pause','fixture.gcode')
     def test_control_needs_correlated_ack_and_post_dispatch_matching_state(self):
         ack={'command':'pause','sequence_id':'42','result':'SUCCESS'}

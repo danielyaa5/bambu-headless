@@ -52,7 +52,8 @@ def snapshot(status: dict) -> dict:
              'mc_remaining_time': 'remaining_minutes', 'print_error': 'print_error',
              'bed_temper': 'bed_c', 'bed_target_temper': 'bed_target_c',
              'nozzle_temper': 'reported_nozzle_c', 'nozzle_target_temper': 'reported_nozzle_target_c',
-             'trays': 'ams_trays', 'nozzles': 'nozzles', 'nozzle_diameter': 'nozzle_diameter', 'nozzle_type': 'nozzle_type'}
+             'trays': 'ams_trays', 'nozzles': 'nozzles', 'nozzle_diameter': 'nozzle_diameter', 'nozzle_type': 'nozzle_type',
+             'hms': 'hms', 'mc_print_sub_stage': 'sub_stage', 'fail_reason': 'fail_reason'}
     return {out: status[key] for key, out in names.items() if key in status}
 
 
@@ -111,12 +112,12 @@ def monitor(args, connection: dict) -> int:
         time.sleep(min(args.interval, remaining) if remaining is not None else args.interval)
 
 
-def control_preflight(status: dict, command: str, job: str):
+def control_preflight(status: dict, command: str, job: str, force: bool = False):
     if not job or status.get('subtask_name') != job:
         raise core.SendError('Current job does not match --job; control refused.')
     if status.get('gcode_state') not in CONTROL_STATES[command]:
         raise core.SendError(f'{command.capitalize()} is not valid in the current printer state.')
-    if command == 'resume' and status.get('print_error') not in (0, '0'):
+    if not force and command == 'resume' and status.get('print_error') not in (0, '0'):
         raise core.SendError('Printer reports an error or unknown error state; resolve it before resuming.')
 
 
@@ -203,9 +204,10 @@ def set_bed_temp(args, connection: dict) -> int:
 def control(args, connection: dict) -> int:
     if not args.yes:
         raise core.SendError('Job controls require --yes and the exact --job name from status.')
+    force = getattr(args, 'force', False)
     with core.printer_lock(connection) as (cache, key):
         status = live_status(connection)
-        control_preflight(status, args.command, args.job)
+        control_preflight(status, args.command, args.job, force=force)
         sequence = str(20000 + time.time_ns() % 9998)
         wire = 'stop' if args.command == 'cancel' else args.command
         payload = {'print': {'command': wire, 'param': '', 'sequence_id': sequence}}
@@ -214,6 +216,7 @@ def control(args, connection: dict) -> int:
         core.write_private(receipt, result)
         events, rc = core.bridge_run(connection, 'control', {
             'control': wire, 'job_name': args.job, 'sequence_id': sequence,
+            'force': force,
             'payload': json.dumps(payload, separators=(',', ':'))})
         result['confirmed'] = rc == 0 and confirmed_control(events, args.command, sequence, args.job)
         result['status'] = snapshot(core.merged_status(events)) if any(e.get('gcode_state') for e in events) else {}
@@ -330,6 +333,8 @@ def build_parser():
         options(p)
         p.add_argument('--job', required=True, help='Exact job name shown by status')
         p.add_argument('--yes', action='store_true', help='Explicitly send the control command')
+        if name == 'resume':
+            p.add_argument('--force', action='store_true', help='Resume despite printer error state')
     bed = sub.add_parser('bed-temp', help='Set target bed temperature in Celsius (0..120)')
     options(bed)
     bed.add_argument('temperature', type=int, help='Target bed temperature in Celsius (0..120)')
