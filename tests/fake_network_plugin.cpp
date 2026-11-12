@@ -28,7 +28,7 @@ int bambu_network_set_on_message_fn(void *, BBL::OnMessageFn) { return 0; }
 int bambu_network_start(void *) { return 0; }
 int bambu_network_bind_detect(void *, std::string, std::string, BBL::detectResult &result) {
     result.dev_id=scenario=="wrong-serial"?"OTHER_PRINTER":"TEST_PRINTER";
-    result.model_id=scenario=="p1s"?"C12":"O1D";
+    result.model_id=(scenario=="p1s"||scenario=="status-vt-tray")?"C12":"O1D";
     return scenario=="detection-failed"?-1:0;
 }
 int bambu_network_connect_printer(void *, std::string, std::string, std::string, std::string, bool) {
@@ -54,7 +54,26 @@ int bambu_network_send_message_to_printer(void *, std::string, std::string paylo
             }})");
             return 0;
         }
-        if(scenario=="start"||scenario=="start-record"||scenario=="bed_temp")status("FINISH","old.gcode");
+        if(scenario=="status-vir-slot") {
+            message("TEST_PRINTER", R"({"print":{
+                "command":"push_status","gcode_state":"RUNNING","subtask_name":"fixture.gcode",
+                "print_error":0,"bed_temper":60.5,"nozzle_temper":215.25,
+                "vir_slot":[{"id":"254","tray_type":"PETG","tray_color":"FFFFFFFF","tray_info_idx":"GFG99"},
+                            {"id":"255","tray_type":"TPU","tray_color":"F98C36FF","tray_info_idx":"GFU99"}],
+                "device":{"nozzle":{"info":[{"id":0,"diameter":0.4,"type":"hardened_steel"},{"id":1,"diameter":0.4,"type":"hardened_steel"}]}}
+            }})");
+            return 0;
+        }
+        if(scenario=="status-vt-tray") {
+            message("TEST_PRINTER", R"({"print":{
+                "command":"push_status","gcode_state":"RUNNING","subtask_name":"fixture.gcode",
+                "print_error":0,"bed_temper":60.5,"nozzle_temper":215.25,
+                "vt_tray":{"id":"254","tray_type":"PETG","tray_color":"FFFFFFFF","tray_info_idx":"GFG99"},
+                "nozzle_diameter":"0.4"
+            }})");
+            return 0;
+        }
+        if(scenario=="start"||scenario=="start-record"||scenario=="no-ams-record"||scenario=="bed_temp")status("FINISH","old.gcode");
         else if(scenario=="resume")status("PAUSE");
         else if(scenario=="resume-error")status("PAUSE","fixture.gcode",123);
         else status("RUNNING");
@@ -87,6 +106,7 @@ int bambu_network_get_user_tasks(void *, BBL::TaskQueryParams q, std::string *bo
 }
 int bambu_network_start_local_print_with_record(void *, BBL::PrintParams params, BBL::OnUpdateStatusFn update_fn, BBL::WasCancelledFn cancel_fn, BBL::OnWaitFn wait_fn) {
     if(params.project_name.empty()||params.task_name.empty()||params.config_filename.empty())return -2010;
+    if(scenario=="no-ams-record" && params.task_use_ams)return -999;
     if(update_fn)update_fn(BBL::PrintingStageCreate,0,"");
     if(cancel_fn&&cancel_fn())return -18;
     if(update_fn)update_fn(BBL::PrintingStageRecord,0,"");

@@ -107,6 +107,33 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertTrue(events[-1]['confirmed'])
         self.assertTrue(any(e.get('event')=='dispatching' and e.get('mode')=='cloud_record' for e in events))
         self.assertTrue(any(e.get('event')=='wait_printer' and e.get('job_id')==777001 for e in events))
+    def test_start_with_record_respects_no_ams(self):
+        cfg={'action':'start','control':'','job_name':'fixture.gcode','sequence_id':'42',
+             'scratch':'no-ams-record','plugin':str(self.plugin),'serial':'TEST_PRINTER','expected_model':'O1D',
+             'payload':json.dumps({'print':{'command':'project_file','sequence_id':'42','param':'','subtask_name':'fixture.gcode','use_ams':False}}),
+             'record_params':{'task_name':'fixture.gcode','project_name':'fixture','filename':'/tmp/a.3mf',
+                              'config_filename':'/tmp/c.3mf','plate_index':1,'bed_type':'textured_plate',
+                              'use_ams':False,
+                              'ams_mapping':'[255]','ams_mapping2':'[{"ams_id":255,"slot_id":255}]',
+                              'ams_mapping_info':'[{"ams":255}]','nozzle_mapping':'[0]','nozzles_info':'[{"id":0}]'}}
+        result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)
+        events=[json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode,0)
+        self.assertTrue(events[-1]['confirmed'])
+    def test_status_preserves_vir_slot_and_vt_tray_telemetry(self):
+        rc,events=self.run_bridge('status-vir-slot',action='status')
+        self.assertEqual(rc,0)
+        telemetry=next(e for e in events if e.get('event')=='telemetry')
+        self.assertEqual(telemetry['trays'],[
+            {'ams_id':'255','id':'254','tray_color':'FFFFFFFF','tray_info_idx':'GFG99','tray_type':'PETG'},
+            {'ams_id':'255','id':'255','tray_color':'F98C36FF','tray_info_idx':'GFU99','tray_type':'TPU'}
+        ])
+        rc,events=self.run_bridge('status-vt-tray',action='status',model='C12')
+        self.assertEqual(rc,0)
+        telemetry=next(e for e in events if e.get('event')=='telemetry')
+        self.assertEqual(telemetry['trays'],[
+            {'ams_id':'255','id':'254','tray_color':'FFFFFFFF','tray_info_idx':'GFG99','tray_type':'PETG'}
+        ])
     def test_history_returns_user_tasks_without_printer_connection(self):
         cfg={'action':'history','limit':5,'offset':0,'scratch':'history','plugin':str(self.plugin),'serial':'TEST_PRINTER'}
         result=subprocess.run([str(self.binary)],input=json.dumps(cfg),capture_output=True,text=True,timeout=5)

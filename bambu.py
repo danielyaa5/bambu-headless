@@ -228,8 +228,12 @@ def legacy_print(args) -> int:
     # Keep the established print path and duplicate-submission receipts intact.
     with tempfile.TemporaryDirectory(prefix='bambu-result-') as directory:
         report = args.report or Path(directory) / 'result.json'
-        argv = [str(args.file), '--host', args.host, '--tray', str(args.tray),
+        argv = [str(args.file), '--host', args.host,
                 '--plate', str(args.plate), '--report', str(report)]
+        if args.tray is not None:
+            argv += ['--tray', str(args.tray)]
+        if getattr(args, 'no_ams', False):
+            argv += ['--no-ams']
         if args.serial:
             argv += ['--serial', args.serial]
         if getattr(args, 'ams_map', None):
@@ -295,7 +299,9 @@ def build_parser():
         options(p)
         p.add_argument('file', type=Path)
         p.add_argument('--plate', type=int, default=1)
-        p.add_argument('--tray', type=int, default=1)
+        p.add_argument('--tray', default=None, help='Zero-based AMS tray (0..15, A1..D4), or external spool (external/ext, ext-l/254, ext-r/255); 1 = A2 (default)')
+        p.add_argument('--no-ams', action='store_true', help='Print from external spool / bypass AMS')
+        p.add_argument('--external', action='store_true', dest='no_ams', help='Print from external spool / bypass AMS')
         p.add_argument('--ams-map', help='Multi-filament plates: one AMS slot per filament in filament order, e.g. B3,B1,B2,A4')
         p.add_argument('--allow-color-mismatch', action='store_true', help='Accept --ams-map slots whose colour differs from the slice')
         p.add_argument('--repeat', action='store_true', help='Intentionally reprint a file with an existing receipt')

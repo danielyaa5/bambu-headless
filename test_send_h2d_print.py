@@ -126,6 +126,110 @@ class SenderSafetyTests(unittest.TestCase):
             with self.subTest(changes=changes),self.assertRaises(sender.SendError):
                 self.fixture(**({'model':'Bambu Lab P1S','mapping':'1'}|changes))
 
+    def test_external_spool_preflight_and_payload_h2d_right_nozzle(self):
+        info = self.fixture(mapping='2', material='TPU')
+        status = {'gcode_state':'FINISH','model_id':'O1D',
+                  'trays':[{'id':'255','ams_id':'255','tray_type':'TPU','tray_color':'F98C36FF','tray_info_idx':'GFU99'}],
+                  'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        sender.preflight(status, info, 255)
+        payload = sender.print_payload(info, 255, '22000')['print']
+        self.assertFalse(payload['use_ams'])
+        self.assertEqual(payload['ams_mapping'], [255])
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':255}])
+        self.assertEqual(payload['nozzle_mapping'], [0])
+        cfg_3mf = Path(self.temp.name) / 'config.3mf'
+        sender.create_config_3mf(self.path, cfg_3mf)
+        r = sender.record_print_params(self.path, cfg_3mf, info, status, 255)
+        self.assertFalse(r['use_ams'])
+        self.assertEqual(json.loads(r['ams_mapping']), [255])
+        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':255}])
+        mapping_info = json.loads(r['ams_mapping_info'])
+        self.assertEqual(mapping_info[0]['ams'], 255)
+        self.assertEqual(mapping_info[0]['nozzleId'], 0)
+        self.assertEqual(mapping_info[0]['filamentType'], 'TPU')
+        self.assertEqual(mapping_info[0]['filamentId'], 'GFU99')
+
+    def test_external_spool_preflight_and_payload_h2d_left_nozzle(self):
+        info = self.fixture(mapping='1', material='PETG')
+        status = {'gcode_state':'FINISH','model_id':'O1D',
+                  'trays':[{'id':'254','ams_id':'255','tray_type':'PETG','tray_color':'FFFFFFFF','tray_info_idx':'GFG99'}],
+                  'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        sender.preflight(status, info, 254)
+        payload = sender.print_payload(info, 254, '22000')['print']
+        self.assertFalse(payload['use_ams'])
+        self.assertEqual(payload['ams_mapping'], [254])
+        self.assertEqual(payload['ams_mapping2'], [{'ams_id':255,'slot_id':254}])
+        self.assertEqual(payload['nozzle_mapping'], [1])
+        cfg_3mf = Path(self.temp.name) / 'config.3mf'
+        sender.create_config_3mf(self.path, cfg_3mf)
+        r = sender.record_print_params(self.path, cfg_3mf, info, status, 254)
+        self.assertFalse(r['use_ams'])
+        self.assertEqual(json.loads(r['ams_mapping']), [254])
+        self.assertEqual(json.loads(r['ams_mapping2']), [{'ams_id':255,'slot_id':254}])
+        mapping_info = json.loads(r['ams_mapping_info'])
+        self.assertEqual(mapping_info[0]['ams'], 254)
+        self.assertEqual(mapping_info[0]['nozzleId'], 1)
+
+    def test_external_spool_rejects_wrong_nozzle_and_wrong_material(self):
+        right_info = self.fixture(mapping='2', material='TPU')
+        left_info = self.fixture(mapping='1', material='PETG')
+        status = {'gcode_state':'FINISH','model_id':'O1D',
+                  'trays':[{'id':'254','ams_id':'255','tray_type':'PETG'},{'id':'255','ams_id':'255','tray_type':'TPU'}],
+                  'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
+            sender.preflight(status, right_info, 254)
+        with self.assertRaisesRegex(sender.SendError, 'different H2D nozzle'):
+            sender.preflight(status, left_info, 255)
+        wrong_mat_status = {'gcode_state':'FINISH','model_id':'O1D',
+                            'trays':[{'id':'255','ams_id':'255','tray_type':'PLA'}],
+                            'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}]}
+        with self.assertRaisesRegex(sender.SendError, 'Selected external spool is missing or its material differs'):
+            sender.preflight(wrong_mat_status, right_info, 255)
+
+    def test_external_spool_p1s(self):
+        info = self.fixture(model='Bambu Lab P1S', mapping='1', plate_model='C12', material='PETG')
+        status = {'gcode_state':'FINISH','model_id':'C12','nozzle_diameter':'0.4',
+                  'trays':[{'id':'254','ams_id':'255','tray_type':'PETG'}]}
+        sender.preflight(status, info, 254)
+        payload = sender.print_payload(info, 254, '42')['print']
+        self.assertFalse(payload['use_ams'])
+        self.assertEqual(payload['ams_mapping'], [254])
+        self.assertNotIn('ams_mapping2', payload)
+
+    def test_parse_tray_spec_and_labels(self):
+        self.assertEqual(sender.parse_tray_spec('ext', hw_nozzle_id=0, is_h2d=True), 255)
+        self.assertEqual(sender.parse_tray_spec('external', hw_nozzle_id=1, is_h2d=True), 254)
+        self.assertEqual(sender.parse_tray_spec('ext', is_h2d=False), 254)
+        self.assertEqual(sender.parse_tray_spec('ext-r'), 255)
+        self.assertEqual(sender.parse_tray_spec('ext-l'), 254)
+        self.assertEqual(sender.parse_tray_spec('254'), 254)
+        self.assertEqual(sender.parse_tray_spec('255'), 255)
+        self.assertEqual(sender.parse_tray_spec('A2'), 1)
+        self.assertEqual(sender.slot_label(255), 'Ext-R')
+        self.assertEqual(sender.slot_label(254), 'Ext-L')
+        self.assertEqual(sender.slot_label(254, is_h2d=False), 'Ext')
+        with self.assertRaises(sender.SendError):
+            sender.parse_tray_spec('invalid')
+
+    def test_cli_no_ams_defaults_and_guards(self):
+        self.fixture(mapping='2', material='TPU')
+        connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}
+        status = {'gcode_state':'FINISH','model_id':'O1D',
+                  'trays':[{'id':'255','ams_id':'255','tray_type':'TPU','tray_color':'F98C36FF'}],
+                  'nozzles':[{'id':0,'diameter':0.4},{'id':1,'diameter':0.4}],
+                  'command':'push_status'}
+        def fake_bridge(c, action, job=None):
+            return [status], 0
+        with mock.patch.object(sender, 'load_connection', return_value=connection), \
+             mock.patch.object(sender, 'bridge_run', side_effect=fake_bridge), \
+             mock.patch.object(sender.Path, 'home', return_value=Path(self.temp.name)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(sender.main([str(self.path), '--host', 'printer.example', '--no-ams']), 0)
+            self.assertEqual(sender.main([str(self.path), '--host', 'printer.example', '--external']), 0)
+            self.assertEqual(sender.main([str(self.path), '--host', 'printer.example', '--tray', 'ext']), 0)
+            with self.assertRaisesRegex(sender.SendError, '--no-ams was specified but tray'):
+                sender.main([str(self.path), '--host', 'printer.example', '--no-ams', '--tray', '1'])
+
     # --- multi-filament plates (one --ams-map slot per filament) ---
     COLORS = ['#161616','#4D3324','#4F3F24','#847D48','#AE835B','#D3B7A7','#F72323','#E8DBB7']
     MAP = 'B3,B1,B2,A4,A2,A1,B4,A3'
@@ -219,6 +323,21 @@ class SenderSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(sender.SendError, 'repeats'):
                 sender.main([str(self.path), '--host', 'printer.example', '--ams-map', 'B3,B3,B2,A4,A2,A1,B4,A3'])
         conn.assert_not_called()
+
+    def test_multi_filament_with_external_spool(self):
+        info = self.multi_fixture()
+        trays = sender.parse_ams_map('ext-l,B1,B2,A4,A2,A1,B4,ext-r', filaments=info['filaments'])
+        self.assertEqual(trays[0], 254)
+        self.assertEqual(trays[7], 255)
+        p = sender.print_payload(info, trays, '22000')['print']
+        self.assertTrue(p['use_ams'])
+        self.assertEqual(p['ams_mapping2'][0], {'ams_id':255,'slot_id':254})
+        self.assertEqual(p['ams_mapping2'][7], {'ams_id':255,'slot_id':255})
+        pure_ext_info = self.multi_fixture(maps='1 2', ids=[1, 2])
+        pure_ext_trays = sender.parse_ams_map('ext-l,ext-r', filaments=pure_ext_info['filaments'])
+        pure_p = sender.print_payload(pure_ext_info, pure_ext_trays, '22000')['print']
+        self.assertFalse(pure_p['use_ams'])
+        self.assertEqual(pure_p['ams_mapping'], [254, 255])
 
     def run_cli(self, *flags, outcome=None, state='FINISH'):
         connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}

@@ -245,6 +245,20 @@ class CLITests(unittest.TestCase):
             with mock.patch.object(core,'main',return_value=0) as legacy:
                 bambu.main(['print','fixture.gcode.3mf','--host','printer.example',*flags])
                 self.assertEqual('--no-timelapse' in legacy.call_args.args[0],forwarded)
+    def test_print_forwards_no_ams_and_external_tray(self):
+        for flags, expect_no_ams, expect_tray in [
+            (['--no-ams'], True, None),
+            (['--external'], True, None),
+            (['--tray', 'ext-r'], False, 'ext-r'),
+            (['--no-ams', '--tray', '255'], True, '255'),
+        ]:
+            with self.subTest(flags=flags), mock.patch.object(core, 'main', return_value=0) as legacy:
+                bambu.main(['check', 'fixture.gcode.3mf', '--host', 'printer.example', *flags])
+                argv = legacy.call_args.args[0]
+                self.assertEqual('--no-ams' in argv, expect_no_ams)
+                if expect_tray:
+                    self.assertIn('--tray', argv)
+                    self.assertEqual(argv[argv.index('--tray') + 1], expect_tray)
     def test_print_forwards_ams_map_and_colour_override_only_when_given(self):
         for flags,expect_map,expect_override in [([],False,False),(['--ams-map','B3,A1'],True,False),
                                                   (['--ams-map','B3,A1','--allow-color-mismatch'],True,True)]:

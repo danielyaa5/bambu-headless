@@ -121,14 +121,28 @@ int main(){
         json safe=pick(p,{"command","sequence_id","gcode_state","subtask_name","stg_cur","mc_percent","layer_num","total_layer_num","mc_remaining_time","print_error","result","reason","err_code","bed_temper","bed_target_temper","nozzle_temper","nozzle_target_temper"});
         for(auto key:{"nozzle_diameter","nozzle_type"})if(p.contains(key))safe[key]=p[key];
         safe["event"]="telemetry";
-        if(!p["ams"].is_null()){
-            json trays=json::array();
+        json trays=json::array();
+        if(!p["ams"].is_null() && p["ams"]["ams"].is_array()){
             for(auto &a : p["ams"]["ams"]){
                 for(auto &t : a["tray"]){
                     json tray=pick(t,{"id","tray_type","tray_color","tray_info_idx"});
                     tray["ams_id"]=a.value("id",json(""));trays.push_back(tray);
                 }
             }
+        }
+        if(p.contains("vir_slot") && p["vir_slot"].is_array()){
+            for(auto &t : p["vir_slot"]){
+                json tray=pick(t,{"id","tray_type","tray_color","tray_info_idx"});
+                tray["ams_id"]="255";
+                trays.push_back(tray);
+            }
+        }
+        if(p.contains("vt_tray") && p["vt_tray"].is_object()){
+            json tray=pick(p["vt_tray"],{"id","tray_type","tray_color","tray_info_idx"});
+            tray["ams_id"]="255";
+            trays.push_back(tray);
+        }
+        if(!trays.empty()){
             safe["trays"]=trays;
         }
         if(!p["device"]["nozzle"].is_null()){
@@ -315,7 +329,7 @@ int main(){
         params.task_layer_inspect=expected_model!="C12";
         params.task_record_timelapse=rp["timelapse"].is_boolean()?rp["timelapse"].get<bool>():true;
         params.task_timelapse_use_internal=false;
-        params.task_use_ams=true;
+        params.task_use_ams=rp.contains("use_ams")&&rp["use_ams"].is_boolean()?rp["use_ams"].get<bool>():true;
         params.task_bed_type=str(rp,"bed_type");
         params.auto_offset_cali=0;
         params.extruder_cali_manual_mode=-1;
