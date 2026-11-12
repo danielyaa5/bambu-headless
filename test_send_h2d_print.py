@@ -486,4 +486,35 @@ class SenderSafetyTests(unittest.TestCase):
                     self.assertEqual(ftp.storbinary('STOR fixture',io.BytesIO(b'fixture bytes'),4),'226 Transfer complete')
                 self.assertEqual(data.unwrapped,not omit_notify)
 
+    def test_load_connection_accepts_europe_and_other_global_regions(self):
+        conf_dir = Path(self.temp.name) / 'config'
+        conf_dir.mkdir(parents=True, exist_ok=True)
+        conf_file = conf_dir / 'BambuStudio.conf'
+        for region in ('Europe', 'North America', 'NorthAmerica', 'US', 'United States', 'Asia-Pacific', 'AsiaPacific', 'Other', ''):
+            with self.subTest(region=region):
+                conf_file.write_text(json.dumps({
+                    'access_code': {'TEST_PRINTER': 'SECRET_123'},
+                    'app': {'region': region, 'slicer_uuid': 'TEST_UUID'}
+                }))
+                with mock.patch.object(sender, 'CONFIG', conf_dir):
+                    conn = sender.load_connection('printer.example', 'TEST_PRINTER')
+                    self.assertEqual(conn['serial'], 'TEST_PRINTER')
+                    self.assertEqual(conn['access_code'], 'SECRET_123')
+                    self.assertEqual(conn['country'], 'US')
+                    self.assertEqual(conn['slicer_uid'], 'TEST_UUID')
+
+    def test_load_connection_rejects_unsupported_regions(self):
+        conf_dir = Path(self.temp.name) / 'config'
+        conf_dir.mkdir(parents=True, exist_ok=True)
+        conf_file = conf_dir / 'BambuStudio.conf'
+        for region in ('China', 'CN', 'Antarctica'):
+            with self.subTest(region=region):
+                conf_file.write_text(json.dumps({
+                    'access_code': {'TEST_PRINTER': 'SECRET_123'},
+                    'app': {'region': region, 'slicer_uuid': 'TEST_UUID'}
+                }))
+                with mock.patch.object(sender, 'CONFIG', conf_dir):
+                    with self.assertRaisesRegex(sender.SendError, 'validated for North America and Europe cloud regions only'):
+                        sender.load_connection('printer.example', 'TEST_PRINTER')
+
 if __name__ == '__main__': unittest.main()

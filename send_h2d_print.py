@@ -184,8 +184,8 @@ def load_connection(host: str, serial: str | None) -> dict:
         if not code:
             raise SendError('The selected printer has no saved Bambu Studio access code.')
         region = conf.get('app', {}).get('region', '')
-        if region not in ('North America', 'US', 'United States', ''):
-            raise SendError('This sender is validated for the US cloud region only.')
+        if region not in ('North America', 'NorthAmerica', 'US', 'United States', 'Europe', 'Asia-Pacific', 'AsiaPacific', 'Other', ''):
+            raise SendError('This sender is validated for North America and Europe cloud regions only.')
         return dict(serial=serial, ip=host, access_code=code, country='US',
                     slicer_uid=conf.get('app', {}).get('slicer_uuid', ''),
                     plugin=str(CONFIG / ('plugins/libbambu_networking.so' if IS_LINUX else 'plugins/libbambu_networking.dylib')),

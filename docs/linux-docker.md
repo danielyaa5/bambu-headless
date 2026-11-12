@@ -12,7 +12,7 @@ the official plugin; no signing keys are extracted or vendor binaries patched.
 - Your own Bambu Studio Linux AppImage and matching Linux networking plugin from
   the `02.08.02` series. ARM Linux and other plugin versions are not validated.
 - An existing signed-in Studio session and saved printer access code for your
-  account. The validated account region is US.
+  account. The validated account regions are North America and Europe.
 - LAN access to printer ports 8883 (MQTT) and 990 (implicit FTPS), plus the passive
   FTPS data ports selected by the printer. The plugin also needs internet access
   for certificate refresh.

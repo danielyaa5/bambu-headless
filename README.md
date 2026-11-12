@@ -16,10 +16,10 @@ This is an experimental open-source wrapper around **Bambu's installed proprieta
 | Studio / plugin | Studio `02.08.02.61`, plugin `02.08.02.60` |
 | Printer | H2D, right 0.4 mm nozzle |
 | Print | One filament, PLA, AMS A2, one selected plate |
-| Account | Existing signed-in Studio configuration, US region |
+| Account | Existing signed-in Studio configuration, North America or Europe region |
 | Result | Matching job reached `PREPARE`; independent logger observed `RUNNING`, later `FINISH` at 100% |
 
-The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Linux/P1S validation includes print submission, layer progress, pause, resume, cancel, and bed-target control. Multi-filament submission with `--ams-map` was exercised once on H2D (8 filaments on both nozzles from two AMS units, November 8, 2026): the live check passed and the job was confirmed in `PREPARE`. It has not been followed to completion. Other configurations, Intel Macs, regions, external spools and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. The P1S test was deliberately canceled after verifying resume; natural completion was not tested.
+The helper rejects plugins outside the `02.08.02` version series. The macOS configuration above and the [Linux/P1S configuration](docs/linux-docker.md#validation) have been exercised on hardware. Linux/P1S validation includes print submission, layer progress, pause, resume, cancel, and bed-target control. Community testing has also verified P1S firmware `01.10.00.00` with the Europe region on Linux Docker (UGREEN NAS / UGOS). Multi-filament submission with `--ams-map` was exercised once on H2D (8 filaments on both nozzles from two AMS units, November 8, 2026): the live check passed and the job was confirmed in `PREPARE`. It has not been followed to completion. Other configurations, Intel Macs, regions, external spools and other nozzle sizes are untested or unsupported. The print command verifies startup; `watch --until-done` follows firmware-reported completion. Neither inspects part quality. The P1S test was deliberately canceled after verifying resume; natural completion was not tested.
 
 ## Requirements
 
