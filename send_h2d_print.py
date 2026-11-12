@@ -429,12 +429,7 @@ def mapping_lists(info: dict, trays: list[int]) -> tuple[list, list, list]:
 def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, tray, timelapse: bool = True) -> dict:
     if info.get('filaments'):
         return record_print_params_multi(path, config_3mf, info, status, list(tray), timelapse)
-    ams_id, slot_id = (255, tray) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
     hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
-    tray_info = live_tray(status, tray)
-    source_color = rgba_hex(info.get('color'))
-    target_color = rgba_hex(tray_info.get('tray_color'), fallback=source_color)
-    filament_id = tray_info.get('tray_info_idx') or info.get('tray_info_idx') or 'GFL99'
     nozzle_by_id = {int(n['id']): n for n in status.get('nozzles', []) if isinstance(n, dict) and 'id' in n}
     nozzle_ids = (0,) if info.get('printer_model') == 'Bambu Lab P1S' else (1, 0)
     nozzles_info = []
@@ -448,20 +443,15 @@ def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, 
         })
     project_stem = info['filename'][:-10] if info['filename'].endswith('.gcode.3mf') else info['filename'][:-4]
     use_ams = tray < 16
-    return {
-        'task_name': info['filename'][:-4],
-        'project_name': project_stem,
-        'preset_name': '',
-        'filename': str(path),
-        'config_filename': str(config_3mf),
-        'plate_index': int(info['plate']),
-        'print_type': 'from_sdcard_view',
-        'bed_type': info['bed_type'],
-        'timelapse': bool(timelapse),
-        'use_ams': use_ams,
-        'ams_mapping': json.dumps([tray], separators=(',', ':')),
-        'ams_mapping2': json.dumps([{'ams_id': ams_id, 'slot_id': slot_id}], separators=(',', ':')),
-        'ams_mapping_info': json.dumps([{
+    if use_ams:
+        ams_id, slot_id = (255, tray) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
+        tray_info = live_tray(status, tray)
+        source_color = rgba_hex(info.get('color'))
+        target_color = rgba_hex(tray_info.get('tray_color'), fallback=source_color)
+        filament_id = tray_info.get('tray_info_idx') or info.get('tray_info_idx') or 'GFL99'
+        ams_mapping = json.dumps([tray], separators=(',', ':'))
+        ams_mapping2 = json.dumps([{'ams_id': ams_id, 'slot_id': slot_id}], separators=(',', ':'))
+        ams_mapping_info = json.dumps([{
             'ams': tray,
             'sourceColor': source_color,
             'targetColor': target_color,
@@ -470,34 +460,11 @@ def record_print_params(path: Path, config_3mf: Path, info: dict, status: dict, 
             'targetFilamentType': '',
             'weight': float(info.get('grams', 0.0)),
             'nozzleId': hw_nozzle_id,
-        }], separators=(',', ':')),
-        'nozzle_mapping': json.dumps([hw_nozzle_id], separators=(',', ':')),
-        'nozzles_info': json.dumps(nozzles_info, separators=(',', ':')),
-    }
-
-def record_print_params_multi(path: Path, config_3mf: Path, info: dict, status: dict, trays: list[int], timelapse: bool = True) -> dict:
-    """Studio's local print record for a multi-filament plate (SelectMachineDialog::get_ams_mapping_result)."""
-    v0, v1, nozzle_map = mapping_lists(info, trays)
-    by_id = {f['id']: (f, t) for f, t in zip(info['filaments'], trays)}
-    mapping_info = []
-    for fid in range(1, info['filament_count'] + 1):
-        if fid not in by_id:
-            mapping_info.append({'ams': -1, 'targetColor': '', 'filamentId': '', 'filamentType': ''})
-            continue
-        f, t = by_id[fid]
-        live = live_tray(status, t)
-        source = rgba_hex(f.get('color'))
-        mapping_info.append({'ams': t, 'sourceColor': source, 'targetColor': rgba_hex(live.get('tray_color'), fallback=source),
-                             'filamentId': f.get('tray_info_idx') or live.get('tray_info_idx') or 'GFL99',
-                             'filamentType': f['type'], 'targetFilamentType': '', 'weight': float(f.get('grams', 0.0)),
-                             'nozzleId': f['hw_nozzle_id']})
-    nozzle_by_id = {int(n['id']): n for n in status.get('nozzles', []) if isinstance(n, dict) and 'id' in n}
-    nozzle_ids = (0,) if info.get('printer_model') == 'Bambu Lab P1S' else (1, 0)
-    nozzles_info = [{'id': nid, 'type': nozzle_by_id.get(nid, {}).get('type') or '', 'flowSize': 'standard_flow',
-                     'diameter': float(nozzle_by_id.get(nid, {}).get('diameter', 0.4))} for nid in nozzle_ids]
-    project_stem = info['filename'][:-10] if info['filename'].endswith('.gcode.3mf') else info['filename'][:-4]
-    compact = dict(separators=(',', ':'))
-    use_ams = any(t < 16 for t in trays)
+        }], separators=(',', ':'))
+    else:
+        ams_mapping = '[]'
+        ams_mapping2 = '[]'
+        ams_mapping_info = '[]'
     return {
         'task_name': info['filename'][:-4],
         'project_name': project_stem,
@@ -509,9 +476,59 @@ def record_print_params_multi(path: Path, config_3mf: Path, info: dict, status: 
         'bed_type': info['bed_type'],
         'timelapse': bool(timelapse),
         'use_ams': use_ams,
-        'ams_mapping': json.dumps(v0, **compact),
-        'ams_mapping2': json.dumps(v1, **compact),
-        'ams_mapping_info': json.dumps(mapping_info, **compact),
+        'ams_mapping': ams_mapping,
+        'ams_mapping2': ams_mapping2,
+        'ams_mapping_info': ams_mapping_info,
+        'nozzle_mapping': json.dumps([hw_nozzle_id], separators=(',', ':')),
+        'nozzles_info': json.dumps(nozzles_info, separators=(',', ':')),
+    }
+
+def record_print_params_multi(path: Path, config_3mf: Path, info: dict, status: dict, trays: list[int], timelapse: bool = True) -> dict:
+    """Studio's local print record for a multi-filament plate (SelectMachineDialog::get_ams_mapping_result)."""
+    use_ams = any(t < 16 for t in trays)
+    compact = dict(separators=(',', ':'))
+    if use_ams:
+        v0, v1, nozzle_map = mapping_lists(info, trays)
+        by_id = {f['id']: (f, t) for f, t in zip(info['filaments'], trays)}
+        mapping_info = []
+        for fid in range(1, info['filament_count'] + 1):
+            if fid not in by_id:
+                mapping_info.append({'ams': -1, 'targetColor': '', 'filamentId': '', 'filamentType': ''})
+                continue
+            f, t = by_id[fid]
+            live = live_tray(status, t)
+            source = rgba_hex(f.get('color'))
+            mapping_info.append({'ams': t, 'sourceColor': source, 'targetColor': rgba_hex(live.get('tray_color'), fallback=source),
+                                 'filamentId': f.get('tray_info_idx') or live.get('tray_info_idx') or 'GFL99',
+                                 'filamentType': f['type'], 'targetFilamentType': '', 'weight': float(f.get('grams', 0.0)),
+                                 'nozzleId': f['hw_nozzle_id']})
+        ams_mapping = json.dumps(v0, **compact)
+        ams_mapping2 = json.dumps(v1, **compact)
+        ams_mapping_info_str = json.dumps(mapping_info, **compact)
+    else:
+        nozzle_map = [f['hw_nozzle_id'] for f in info['filaments']]
+        ams_mapping = '[]'
+        ams_mapping2 = '[]'
+        ams_mapping_info_str = '[]'
+    nozzle_by_id = {int(n['id']): n for n in status.get('nozzles', []) if isinstance(n, dict) and 'id' in n}
+    nozzle_ids = (0,) if info.get('printer_model') == 'Bambu Lab P1S' else (1, 0)
+    nozzles_info = [{'id': nid, 'type': nozzle_by_id.get(nid, {}).get('type') or '', 'flowSize': 'standard_flow',
+                     'diameter': float(nozzle_by_id.get(nid, {}).get('diameter', 0.4))} for nid in nozzle_ids]
+    project_stem = info['filename'][:-10] if info['filename'].endswith('.gcode.3mf') else info['filename'][:-4]
+    return {
+        'task_name': info['filename'][:-4],
+        'project_name': project_stem,
+        'preset_name': '',
+        'filename': str(path),
+        'config_filename': str(config_3mf),
+        'plate_index': int(info['plate']),
+        'print_type': 'from_sdcard_view',
+        'bed_type': info['bed_type'],
+        'timelapse': bool(timelapse),
+        'use_ams': use_ams,
+        'ams_mapping': ams_mapping,
+        'ams_mapping2': ams_mapping2,
+        'ams_mapping_info': ams_mapping_info_str,
         'nozzle_mapping': json.dumps(nozzle_map, **compact),
         'nozzles_info': json.dumps(nozzles_info, **compact),
     }
@@ -519,13 +536,21 @@ def record_print_params_multi(path: Path, config_3mf: Path, info: dict, status: 
 def print_payload(info: dict, tray, sequence: str, timelapse: bool = True) -> dict:
     if info.get('filaments'):
         trays = list(tray)
-        ams_mapping, ams_mapping2, nozzle_mapping = mapping_lists(info, trays)
         use_ams = any(t < 16 for t in trays)
+        if use_ams:
+            ams_mapping, ams_mapping2, nozzle_mapping = mapping_lists(info, trays)
+        else:
+            ams_mapping, ams_mapping2 = [], []
+            nozzle_mapping = [f['hw_nozzle_id'] for f in info['filaments']]
     else:
         hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
-        ams_id, slot_id = (255, tray) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
-        ams_mapping, ams_mapping2, nozzle_mapping = [tray], [{'ams_id': ams_id, 'slot_id': slot_id}], [hw_nozzle_id]
         use_ams = tray < 16
+        if use_ams:
+            ams_id, slot_id = (255, tray) if tray in EXTERNAL_SLOTS else (tray // 4, tray % 4)
+            ams_mapping, ams_mapping2 = [tray], [{'ams_id': ams_id, 'slot_id': slot_id}]
+        else:
+            ams_mapping, ams_mapping2 = [], []
+        nozzle_mapping = [hw_nozzle_id]
     payload = {'print': dict(command='project_file', sequence_id=sequence, param=info['param'],
                           project_id='0', profile_id='0', task_id='0', subtask_id='0',
                           subtask_name=info['filename'][:-4], url='ftp://' + info['filename'],
