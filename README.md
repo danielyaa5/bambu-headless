@@ -35,7 +35,7 @@ These are the macOS requirements; see the [Linux setup guide](docs/linux-docker.
 ## Use
 
 ```sh
-git clone [https://github.com/danielyaa5/bambu-headless.git](https://github.com/danielyaa5/bambu-headless.git)
+git clone https://github.com/danielyaa5/bambu-headless.git
 cd bambu-headless
 python3 send_h2d_print.py part.gcode.3mf --host printer.example
 ```
