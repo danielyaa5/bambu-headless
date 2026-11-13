@@ -87,7 +87,9 @@ The SSH account must not receive unrestricted Docker or sudo access.
 The intended restrictions are:
 
 - Home Assistant uses a dedicated SSH key.
-- The SSH server accepts only three exact command strings.
+- Printer-control dispatch accepts only three exact command strings.
+  Other SSH capabilities, including file transfer and forwarding, require
+  separate restrictions; see the platform-specific notes below.
 - The wrapper accepts exactly one action: `pause`, `resume` or `cancel`.
 - The wrapper obtains the job name itself.
 - Home Assistant cannot supply arbitrary CLI arguments or job names.
