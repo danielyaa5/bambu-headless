@@ -35,7 +35,7 @@ These are the macOS requirements; see the [Linux setup guide](docs/linux-docker.
 ## Use
 
 ```sh
-git clone https://github.com/danielyaa5/bambu-headless.git
+git clone [https://github.com/danielyaa5/bambu-headless.git](https://github.com/danielyaa5/bambu-headless.git)
 cd bambu-headless
 python3 send_h2d_print.py part.gcode.3mf --host printer.example
 ```
@@ -78,6 +78,12 @@ python3 bambu.py print part.gcode.3mf --host printer.example
 Defaults: plate 1, 0.4 mm nozzle (left or right on H2D), AMS tray `1` (A2). Use `--tray 0` for A1, `--tray 2` for A3, `--tray 5` for B2, etc. A plate with several filaments needs `--ams-map` with one slot per filament in filament order, for example `--ams-map B3,B1,B2,A4,A2,A1,B4,A3`; each slot must hold that filament's material and reported colour on the AMS feeding the filament's sliced nozzle, or nothing is uploaded (`--allow-color-mismatch` relaxes only the colour check). Prints are registered in Bambu Handy / Studio cloud printing history by default via `bambu_network_start_local_print_with_record`; add `--no-cloud-record` to send a raw LAN MQTT `project_file` command without creating a cloud task. The printer's camera timelapse is recorded by default; add `--no-timelapse` to skip it for one job. Add `--serial YOUR_PRINTER_SERIAL` if Studio has more than one saved printer. Credentials are read from Studio; do not put access codes or tokens on the command line.
 
 `--json` gives machine-readable output; `watch` emits one JSON object per line. `--report reports/result.json` saves the latest result. Reports exclude access codes and tokens, but may contain job names, file paths, materials, and (for `printers`) saved printer serials. Review them before sharing.
+
+## Home Assistant
+
+See [Home Assistant print controls over SSH and Docker Compose](docs/home-assistant-docker.md) for pause, resume and cancel controls using a dedicated, restricted SSH account and an existing Docker Compose deployment.
+
+The guide includes a control wrapper, Home Assistant shell commands, optional template buttons and dashboard controls, and deployment validation notes. It does not use the Home Assistant Bambu Lab integration to dispatch commands; the existing `bambu-headless` configuration and networking plugin are still required.
 
 ## Start guards and retry behavior
 
