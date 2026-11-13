@@ -110,7 +110,7 @@ Protect that key and Home Assistant backups accordingly.
 Create `/usr/local/bin/bambu-ha-control` as an administrator:
 
 ```bash
-#!/bin/bash
+#!/usr/bin/bash
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -121,72 +121,74 @@ fi
 ACTION="$1"
 
 case "$ACTION" in
-    pause|resume|cancel)
-        ;;
+    pause|resume|cancel) ;;
     *)
         echo "Usage: bambu-ha-control {pause|resume|cancel}" >&2
         exit 2
         ;;
 esac
 
-# Replace with the absolute path to your existing Compose project.
 cd /volume1/docker/bambu-headless
 
-if ! STATUS="$(docker compose run --rm --no-deps -T bambu status --json)"; then
-    echo "Printer status query failed; no control command was dispatched." >&2
-    exit 3
-fi
+STATUS="$(
+    /usr/bin/docker compose run --rm --no-deps -T \
+        bambu status --json
+)"
 
-if ! JOB="$(printf '%s' "$STATUS" | python3 -c '
+JOB="$(
+    printf '%s\n' "$STATUS" |
+        /usr/bin/python3 -c '
 import json
 import sys
 
-try:
-    status = json.load(sys.stdin)
-except (ValueError, OSError):
-    print("Invalid status JSON; no control command was dispatched.", file=sys.stderr)
-    sys.exit(1)
+job = json.load(sys.stdin).get("job")
+if not isinstance(job, str) or not job:
+    raise SystemExit("No identifiable job was returned.")
+print(job, end="")
+'
+)"
 
-if not isinstance(status, dict):
-    print("Status must be a JSON object.", file=sys.stderr)
-    sys.exit(1)
-
-job = status.get("job")
-if not isinstance(job, str) or not job.strip():
-    print("No identifiable job; no control command was dispatched.", file=sys.stderr)
-    sys.exit(1)
-
-if any(ord(char) < 32 or ord(char) == 127 for char in job):
-    print("Unsupported control character in job name.", file=sys.stderr)
-    sys.exit(1)
-
-sys.stdout.write(job)
-')"; then
-    exit 3
-fi
-
-exec docker compose run --rm --no-deps -T bambu \
-    "$ACTION" --job "$JOB" --yes
+exec /usr/bin/docker compose run --rm --no-deps -T \
+    bambu "$ACTION" --job "$JOB" --yes
 ```
+
+This is the wrapper used in the validated UGOS deployment. Before
+installing it elsewhere, check the absolute paths to Bash, Docker and
+Python 3, and replace the Compose project directory as necessary.
+Changes to these paths are deployment-specific adaptations.
 
 Set ownership and permissions:
 
 ```sh
 sudo chown root:root /usr/local/bin/bambu-ha-control
 sudo chmod 755 /usr/local/bin/bambu-ha-control
-sudo bash -n /usr/local/bin/bambu-ha-control
+sudo /usr/bin/bash -n /usr/local/bin/bambu-ha-control
 ```
+
+Use the appropriate Bash path if your host differs from the tested
+deployment.
 
 The script deliberately:
 
 - Rejects missing, additional and unsupported arguments.
-- Stops if the status command fails.
-- Rejects invalid JSON and missing, empty or non-string job names.
-- Preserves the exact job name rather than trimming or reconstructing it.
+- Uses absolute paths for Docker and Python 3.
+- Uses `set -euo pipefail` so a failed status query or JSON-processing
+  command stops execution before the control command.
+- Rejects missing, empty or non-string job names.
+- Preserves the returned job name rather than trimming or reconstructing it.
 - Passes the job name as one quoted argument.
 - Uses `-T` so Compose does not allocate a pseudo-terminal.
 - Leaves printer-state validation and final job matching to the CLI.
 - Does not retry a control command.
+
+Malformed JSON or an unexpected top-level JSON value causes the
+JSON-processing command to fail. This wrapper does not provide custom
+messages for every parsing failure and does not explicitly reject
+whitespace-only names or control characters.
+
+Bash command substitution removes trailing newline characters. Ordinary
+job names are preserved, including spaces and punctuation; this wrapper
+should not be treated as supporting arbitrary control characters in names.
 
 A reported job name is not proof that a print is currently running.
 Printers may retain the name of a finished or failed job. The CLI must
@@ -256,8 +258,29 @@ Before changing this file:
 3. Review the existing dispatcher and its ordering.
 4. Do not replace the vendor file with an unrelated generic script.
 
-The following account-specific branch was inserted before the existing
-administrator/default handling:
+The account-specific allowlist used this dispatch pattern:
+
+```bash
+if [ "$USER" = "ha-bambu" ]; then
+    case "$SSH_ORIGINAL_COMMAND" in
+        "bambu-ha-control pause"|"bambu-ha-control resume"|"bambu-ha-control cancel")
+            exec /usr/bin/sudo -n /usr/local/bin/bambu-ha-control \
+                "${SSH_ORIGINAL_COMMAND##* }"
+            ;;
+    esac
+fi
+```
+
+Place the account-specific handling before the existing administrator
+and default handling.
+
+In the tested arrangement, unmatched commands fell through to the
+existing vendor restrictions. That is not equivalent to a standalone
+deny-all dispatcher: any file-transfer handling earlier in the vendor
+script must also be considered.
+
+For a dedicated control account, an explicit rejection branch can prevent
+unmatched commands from reaching later handlers:
 
 ```bash
 if [ "$USER" = "ha-bambu" ]; then
@@ -274,11 +297,12 @@ if [ "$USER" = "ha-bambu" ]; then
 fi
 ```
 
-Check that `/usr/bin/sudo` is the correct absolute path on your host.
+The explicit-rejection variant is a hardening example, not a claim about
+the exact contents of the tested vendor dispatcher. Its placement must
+be reviewed in the context of the complete script, including any earlier
+SFTP handling.
 
-The explicit rejection branch prevents this account from falling through
-to other command handlers. Account restrictions must be reviewed in the
-context of the complete vendor script.
+Check that `/usr/bin/sudo` is the correct absolute path on your host.
 
 This is an UGOS-specific pattern, not a portable OpenSSH configuration.
 Vendor updates may change or replace this file. Recheck the restriction
@@ -668,12 +692,14 @@ Resolve the underlying status/configuration problem before testing a
 control command.
 
 The wrapper must not continue after a failed query or parse failure.
+The installed wrapper may show a Python traceback for malformed JSON
+or an unexpected top-level JSON value.
 
 ### `Current job does not match --job; control refused`
 
 Do not hard-code a previous job name.
 
-The wrapper obtains the current name and preserves it exactly.
+The wrapper obtains the current name and passes it as a quoted argument.
 A mismatch can still occur if the printer changes jobs between the
 status query and the control operation.
 
@@ -734,16 +760,18 @@ The deployment validation included:
 Validation boundaries:
 
 - The live deployment used UGOS-specific SSH command restrictions.
+- The wrapper shown in this guide was checked against the installed
+  wrapper after live validation.
 - The generic OpenSSH alternative was not tested in that deployment.
 - The command-specific sudoers alternative was not part of the live test.
+- The explicit-rejection SSH dispatcher variant is a hardening example,
+  not a byte-for-byte record of the tested vendor dispatcher.
 - The tests do not establish that every printer model or firmware behaves
   identically.
 - They do not constitute validation of a particular upstream Europe
   region-support commit.
-- The examples in this document are consolidated configuration examples.
-  The live results above describe the deployed setup; they are not a
-  claim that every published example was separately installed and tested
-  byte-for-byte.
+- The illustrative Home Assistant entity names and dashboard examples
+  should not be treated as a byte-for-byte record of the tested deployment.
 
 ## Further reading
 
