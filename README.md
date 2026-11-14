@@ -79,6 +79,12 @@ Defaults: plate 1, 0.4 mm nozzle (left or right on H2D), AMS tray `1` (A2). Use 
 
 `--json` gives machine-readable output; `watch` emits one JSON object per line. `--report reports/result.json` saves the latest result. Reports exclude access codes and tokens, but may contain job names, file paths, materials, and (for `printers`) saved printer serials. Review them before sharing.
 
+## Home Assistant
+
+See [Home Assistant print controls over SSH and Docker Compose](docs/home-assistant-docker.md) for pause, resume and cancel controls using a dedicated, restricted SSH account and an existing Docker Compose deployment.
+
+The guide includes a control wrapper, Home Assistant shell commands, optional template buttons and dashboard controls, and deployment validation notes. It does not use the Home Assistant Bambu Lab integration to dispatch commands; the existing `bambu-headless` configuration and networking plugin are still required.
+
 ## Start guards and retry behavior
 
 - Verifies the archive and embedded G-code checksum, selected plate, printer model and supported nozzle/filament mapping.
