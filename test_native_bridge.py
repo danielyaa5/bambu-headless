@@ -70,6 +70,9 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertEqual(telemetry['trays'],[{'ams_id':'0','id':'1','tray_type':'PLA',
                                             'tray_color':'FFFFFFFF','tray_info_idx':'GFA00'}])
         self.assertEqual(telemetry['nozzles'],[{'id':0,'diameter':0.4,'type':'hardened_steel'}])
+        self.assertEqual(telemetry['plate'],{'base':4,'cali2d_id':'','cur_id':'P0101','mat':1,'tar_id':''})
+        self.assertIs(telemetry['buildplate_marker_detector'],False)
+        self.assertNotIn('private_field',telemetry['plate'])
         self.assertNotIn('private_field',telemetry)
         self.assertEqual(events[-1]['event'],'status_complete')
     def test_arbitrary_control_commands_rejected_before_plugin_load(self):

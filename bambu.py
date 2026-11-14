@@ -53,8 +53,13 @@ def snapshot(status: dict) -> dict:
              'bed_temper': 'bed_c', 'bed_target_temper': 'bed_target_c',
              'nozzle_temper': 'reported_nozzle_c', 'nozzle_target_temper': 'reported_nozzle_target_c',
              'trays': 'ams_trays', 'nozzles': 'nozzles', 'nozzle_diameter': 'nozzle_diameter', 'nozzle_type': 'nozzle_type',
+             'buildplate_marker_detector': 'buildplate_marker_detector',
              'hms': 'hms', 'mc_print_sub_stage': 'sub_stage', 'fail_reason': 'fail_reason'}
-    return {out: status[key] for key, out in names.items() if key in status}
+    result = {out: status[key] for key, out in names.items() if key in status}
+    plate = core.describe_plate(status.get('plate'))
+    if plate:
+        result['plate'] = plate
+    return result
 
 
 def status_line(value: dict) -> str:
@@ -381,7 +386,10 @@ def main(argv=None) -> int:
     with core.printer_lock(connection):
         if args.command == 'status':
             result = snapshot(live_status(connection))
-            output(args, result, status_line(result) + '\nAMS: ' + json.dumps(result.get('ams_trays', [])) + '\nNozzles: ' + json.dumps(result.get('nozzles', [])))
+            output(args, result, status_line(result)
+                   + '\nAMS: ' + json.dumps(result.get('ams_trays', []))
+                   + '\nNozzles: ' + json.dumps(result.get('nozzles', []))
+                   + '\nPlate: ' + core.format_plate(result.get('plate'), result.get('buildplate_marker_detector')))
         elif args.command == 'upload':
             path = args.file.expanduser().resolve()
             info = core.inspect_file(path, args.plate)

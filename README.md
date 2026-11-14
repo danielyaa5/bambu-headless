@@ -57,7 +57,7 @@ python3 bambu.py files list
 | --- | --- |
 | `printers` | Lists Studio's saved printer identities, never access-code values; no LAN scan |
 | `history` | Lists Bambu Handy / Studio cloud print history tasks (`--limit`, `--offset`) |
-| `status` | Fresh job, progress, temperatures, AMS and nozzle details |
+| `status` | Fresh job, progress, temperatures, AMS, nozzle and reported build plate details |
 | `watch` | Progress monitoring, JSON Lines, deadlines and optional completion exit |
 | `inspect FILE` | Offline validation and slice details |
 | `check FILE` | Slice and live printer compatibility checks |
@@ -82,7 +82,7 @@ Defaults: plate 1, 0.4 mm nozzle (left or right on H2D), AMS tray `1` (A2). Use 
 ## Start guards and retry behavior
 
 - Verifies the archive and embedded G-code checksum, selected plate, printer model and supported nozzle/filament mapping.
-- Verifies the printer's model and identity through the official plugin before upload and again before dispatch. Reads fresh telemetry; refuses busy, paused or unknown states and mismatched AMS material or nozzle diameter. It cannot verify the physical plate or spool contents.
+- Verifies the printer's model and identity through the official plugin before upload and again before dispatch. Reads fresh telemetry (including `device.plate` and `xcam.buildplate_marker_detector` when reported); refuses busy, paused or unknown states and mismatched AMS material or nozzle diameter. Reported plate telemetry is diagnostic only: it reflects firmware state rather than continuously scanning unprinted swaps or markerless third-party plates, and cannot verify that the plate is physically clear or confirm spool contents.
 - Uploads over certificate-validated implicit FTPS and downloads the full file to compare size and MD5. An existing identical file is reused.
 - Uses a per-printer local lock and saves a receipt **before** dispatch. A timeout is an uncertain outcome, not permission to retry.
 - Reports success only when telemetry identifies the requested job in `PREPARE` or `RUNNING`. A publish acknowledgment alone is insufficient.

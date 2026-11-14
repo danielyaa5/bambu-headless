@@ -323,6 +323,51 @@ def create_config_3mf(source_3mf: Path, dst_3mf: Path) -> Path:
     return dst_3mf
 
 EXTERNAL_SLOTS = {254, 255}
+KNOWN_PLATE_IDS = {
+    'P0101': ('Textured PEI Plate', 'textured_plate'),
+}
+
+
+def describe_plate(plate) -> dict | None:
+    """Return printer-reported plate metadata with verified cur_id labels when known."""
+    if not isinstance(plate, dict) or not plate:
+        return None
+    out = {k: plate[k] for k in ('base', 'cur_id', 'mat', 'tar_id', 'cali2d_id') if k in plate}
+    if not out:
+        return None
+    cur_id = out.get('cur_id')
+    if isinstance(cur_id, str) and cur_id in KNOWN_PLATE_IDS:
+        name, bed_type = KNOWN_PLATE_IDS[cur_id]
+        out['name'] = name
+        out['bed_type'] = bed_type
+    return out
+
+
+def _safe_inline(value) -> str:
+    """Escape untrusted telemetry strings before printing them to a terminal."""
+    return json.dumps(str(value), ensure_ascii=True)[1:-1]
+
+
+def format_plate(plate, marker_detector=None) -> str:
+    """Format printer-reported build plate telemetry for human status output."""
+    info = describe_plate(plate)
+    parts = []
+    if info:
+        cur_id = info.get('cur_id')
+        label = info.get('name') or (f"id {_safe_inline(cur_id)}" if cur_id else 'reported id unset')
+        details = []
+        if info.get('name') and cur_id:
+            details.append(f"id {_safe_inline(cur_id)}")
+        for key in ('tar_id', 'mat', 'base', 'cali2d_id'):
+            val = info.get(key)
+            if val is not None and val != '':
+                details.append(f"{key} {_safe_inline(val) if isinstance(val, str) else val}")
+        parts.append(f"{label} ({', '.join(details)})" if details else label)
+    else:
+        parts.append('not reported')
+    if isinstance(marker_detector, bool):
+        parts.append(f"marker detector {'on' if marker_detector else 'off'}")
+    return '; '.join(parts)
 
 def parse_tray_spec(spec: str | int, hw_nozzle_id: int | None = None, is_h2d: bool = True) -> int:
     s = str(spec).strip().upper()
@@ -741,9 +786,18 @@ def run_locked(args, path, info, connection, cache, printer_key) -> int:
                   f"#{rgba_hex(live.get('tray_color'), fallback='')[:6]}), {row['nozzle']} nozzle", flush=True)
     else:
         preflight(status, info, args.tray)
-    report['preflight'] = {k: status[k] for k in ('gcode_state', 'subtask_name', 'model_id', 'trays', 'nozzles', 'nozzle_diameter') if k in status}
+    preflight_report = {k: status[k] for k in ('gcode_state', 'subtask_name', 'model_id', 'trays', 'nozzles', 'nozzle_diameter', 'buildplate_marker_detector') if k in status}
+    plate_info = describe_plate(status.get('plate'))
+    if plate_info:
+        preflight_report['plate'] = plate_info
+    report['preflight'] = preflight_report
     source_name = "external spool" if (not multi and args.tray in EXTERNAL_SLOTS) or (multi and all(t in EXTERNAL_SLOTS for t in trays)) else "AMS"
     print(f"Live preflight passed: {status['gcode_state']}; {source_name} material and nozzle match.", flush=True)
+    if plate_info or isinstance(status.get('buildplate_marker_detector'), bool):
+        line = f"Printer-reported plate: {format_plate(plate_info, status.get('buildplate_marker_detector'))}"
+        if plate_info and plate_info.get('bed_type') and plate_info['bed_type'] != info['bed_type']:
+            line += f" (note: slice targets {info['bed_type']}, differs from reported {plate_info['bed_type']}; unscanned or third-party plates are not auto-detected)"
+        print(line, flush=True)
     if args.sign_probe and not args.start:
         events, rc = bridge_run(connection, 'sign_probe')
         report['read_only_probe_passed'] = rc == 0 and any(e.get('event') == 'verification' and e.get('confirmed') for e in events)

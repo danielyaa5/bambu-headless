@@ -49,7 +49,9 @@ int bambu_network_send_message_to_printer(void *, std::string, std::string paylo
                 "print_error":0,"bed_temper":60.5,"nozzle_temper":215.25,
                 "ams":{"ams":[{"id":"0","tray":[{"id":"1","tray_type":"PLA",
                     "tray_color":"FFFFFFFF","tray_info_idx":"GFA00","private_field":"omit"}]}]},
-                "device":{"nozzle":{"info":[{"id":0,"diameter":0.4,"type":"hardened_steel"}]}},
+                "device":{"nozzle":{"info":[{"id":0,"diameter":0.4,"type":"hardened_steel"}]},
+                          "plate":{"base":4,"cali2d_id":"","cur_id":"P0101","mat":1,"tar_id":"","private_field":"omit"}},
+                "xcam":{"buildplate_marker_detector":false,"private_field":"omit"},
                 "private_field":"omit"
             }})");
             return 0;

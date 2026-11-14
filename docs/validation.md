@@ -74,6 +74,6 @@ The native helper compiled successfully without loading the proprietary plugin. 
 - Only the configuration above has been tested. A version-family guard is a conservative filter, not proof that every plugin in that family is ABI-compatible.
 - The printer's exact firmware version was not captured in the retained start evidence.
 - File checksums detect transfer errors. They do not establish that arbitrary G-code is safe or appropriate for a printer.
-- Live checks cannot establish a clear build plate, the physical spool's identity or the absence of concurrent commands from other clients.
+- Live telemetry surfaces firmware-reported `device.plate` (decoded for verified IDs such as `P0101` = `Textured PEI Plate`, raw otherwise) and `xcam.buildplate_marker_detector`, but live checks cannot verify an unscanned plate swap, identify markerless third-party plates, establish a clear build plate, confirm the physical spool's identity or detect concurrent commands from other clients.
 - Matching telemetry proves the requested start state, not a completed or successful print.
 - Cloud certificate refresh and an existing proprietary plugin installation remain dependencies.

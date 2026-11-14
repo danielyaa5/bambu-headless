@@ -148,11 +148,23 @@ int main(){
         if(!trays.empty()){
             safe["trays"]=trays;
         }
-        if(!p["device"]["nozzle"].is_null()){
-            json nozzles=json::array();
-            for(auto &n : p["device"]["nozzle"]["info"])
-                nozzles.push_back(pick(n,{"id","diameter","type"}));
-            safe["nozzles"]=nozzles;
+        if(p.contains("device") && p["device"].is_object()){
+            if(p["device"].contains("nozzle") && p["device"]["nozzle"].is_object() &&
+               p["device"]["nozzle"].contains("info") && p["device"]["nozzle"]["info"].is_array()){
+                json nozzles=json::array();
+                for(auto &n : p["device"]["nozzle"]["info"])
+                    nozzles.push_back(pick(n,{"id","diameter","type"}));
+                safe["nozzles"]=nozzles;
+            }
+            if(p["device"].contains("plate") && p["device"]["plate"].is_object()){
+                json plate=pick(p["device"]["plate"],{"base","cur_id","mat","tar_id","cali2d_id"});
+                if(!plate.empty())safe["plate"]=plate;
+            }
+        }
+        if(p.contains("xcam") && p["xcam"].is_object() &&
+           p["xcam"].contains("buildplate_marker_detector") &&
+           p["xcam"]["buildplate_marker_detector"].is_boolean()){
+            safe["buildplate_marker_detector"]=p["xcam"]["buildplate_marker_detector"];
         }
         {
             std::lock_guard<std::mutex> lock(state_mutex);

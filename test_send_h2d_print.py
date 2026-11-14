@@ -413,6 +413,23 @@ class SenderSafetyTests(unittest.TestCase):
         self.last_upload.assert_not_called()
         self.assertEqual([c.args[1] for c in self.last_bridge.call_args_list], ['status'])
 
+    def test_plate_telemetry_is_recorded_without_blocking_third_party_plates(self):
+        self.fixture()
+        report_path = Path(self.temp.name) / 'plate-report.json'
+        status = dict(self.status(state='FINISH'), command='push_status',
+                      plate={'base': 4, 'cali2d_id': '', 'cur_id': 'P0101', 'mat': 1, 'tar_id': ''},
+                      buildplate_marker_detector=False)
+        with mock.patch.object(sender, 'load_connection', return_value={'serial': 'TEST_PRINTER', 'ip': 'printer.example'}), \
+             mock.patch.object(sender, 'bridge_run', return_value=([status], 0)), \
+             mock.patch.object(sender.Path, 'home', return_value=Path(self.temp.name)), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(sender.main([str(self.path), '--host', 'printer.example', '--report', str(report_path)]), 0)
+        self.assertIn('Printer-reported plate: Textured PEI Plate (id P0101, mat 1, base 4); marker detector off', out.getvalue())
+        self.assertIn('differs from reported textured_plate', out.getvalue())
+        saved = json.loads(report_path.read_text())
+        self.assertEqual(saved['preflight']['plate']['name'], 'Textured PEI Plate')
+        self.assertIs(saved['preflight']['buildplate_marker_detector'], False)
+
     def test_uncertain_dispatch_receipt_blocks_next_start(self):
         self.fixture()
         with self.assertRaisesRegex(sender.SendError, 'Start was not confirmed'):

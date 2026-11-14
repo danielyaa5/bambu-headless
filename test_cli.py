@@ -275,6 +275,22 @@ class CLITests(unittest.TestCase):
             bambu.main(['files','list','--host','printer.example','--json'])
             self.assertEqual(json.loads(out.getvalue()),{'files':listing})
         self.assertNotIn('\x1b',bambu.status_line({'state':'RUNNING','job':'job\x1b[2J'}))
+    def test_status_reports_decoded_and_raw_build_plate_without_guessing(self):
+        known=self.status()|{'plate':{'base':4,'cali2d_id':'','cur_id':'P0101','mat':1,'tar_id':''},'buildplate_marker_detector':False}
+        with mock.patch.object(core,'load_connection',return_value={}),mock.patch.object(core,'printer_lock',return_value=nullcontext()), \
+             mock.patch.object(bambu,'live_status',return_value=known),redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(bambu.main(['status','--host','printer.example']),0)
+            self.assertIn('Plate: Textured PEI Plate (id P0101, mat 1, base 4); marker detector off',out.getvalue())
+        snap=bambu.snapshot(known)
+        self.assertEqual(snap['plate']['name'],'Textured PEI Plate')
+        self.assertEqual(snap['plate']['bed_type'],'textured_plate')
+        self.assertIs(snap['buildplate_marker_detector'],False)
+        unknown=bambu.snapshot(self.status()|{'plate':{'cur_id':'P0999\x1b[2J','mat':2}})
+        self.assertNotIn('name',unknown['plate'])
+        self.assertNotIn('bed_type',unknown['plate'])
+        self.assertNotIn('\x1b',core.format_plate(unknown['plate'],True))
+        self.assertIn('id P0999\\u001b[2J (mat 2); marker detector on',core.format_plate(unknown['plate'],True))
+        self.assertEqual(core.format_plate(None),'not reported')
     def test_history_fetches_cloud_print_records(self):
         hit={'id':9001,'title':'part','status':2,'startTime':'2026-01-01T00:00:00Z',
              'costTime':120,'weight':10.5,'deviceModel':'Bambu Lab H2D','amsDetailMapping':[{'ams':7,'filamentId':'GFA00','filamentType':'PLA'}]}
