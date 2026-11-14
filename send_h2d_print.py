@@ -276,13 +276,46 @@ def h2d_tray_nozzle(status: dict, tray: int) -> int:
                     return switched
     return 1 if (tray // 4) == 0 else 0
 
-def preflight(status: dict, info: dict, tray: int) -> None:
+def matching_ams_slots_on_nozzle(
+    status: dict,
+    hw_nozzle_id: int,
+    material: str,
+    is_h2d: bool = True,
+    color: str | None = None,
+    exclude: set[int] | None = None,
+) -> list[int]:
+    """Return live AMS slots (0..15) feeding the target nozzle that hold matching filament."""
+    want_color = rgba_hex(color, fallback='')[:6] if color else ''
+    matches = []
+    for row in status.get('trays', []):
+        if not isinstance(row, dict):
+            continue
+        ams_raw, id_raw = str(row.get('ams_id', '')), str(row.get('id', ''))
+        if not (ams_raw.isdigit() and id_raw.isdigit()):
+            continue
+        ams_id, slot_id = int(ams_raw), int(id_raw)
+        if not (0 <= ams_id <= 3 and 0 <= slot_id <= 3):
+            continue
+        slot = ams_id * 4 + slot_id
+        if exclude and slot in exclude:
+            continue
+        if row.get('tray_type') != material:
+            continue
+        if is_h2d and h2d_tray_nozzle(status, slot) != hw_nozzle_id:
+            continue
+        if want_color and rgba_hex(row.get('tray_color'), fallback='')[:6] != want_color:
+            continue
+        matches.append(slot)
+    return sorted(matches)
+
+def preflight(status: dict, info: dict, tray: int, force_external: bool = False) -> None:
     if status.get('gcode_state') not in IDLE_STATES:
         raise SendError(f'Printer is {status.get("gcode_state", "unknown")}; refusing to interrupt an active job.')
     if status.get('model_id') != info.get('model_id', 'O1D'):
         raise SendError('Live printer model is unknown or does not match the sliced file.')
     hw_nozzle_id = int(info.get('hw_nozzle_id', 0))
-    if info.get('printer_model', 'Bambu Lab H2D') == 'Bambu Lab H2D':
+    is_h2d = info.get('printer_model', 'Bambu Lab H2D') == 'Bambu Lab H2D'
+    if is_h2d:
         expected_hw_nozzle = h2d_tray_nozzle(status, tray)
         if hw_nozzle_id != expected_hw_nozzle:
             slot_desc = "External spool" if tray in (254, 255) else "Selected AMS tray"
@@ -291,6 +324,16 @@ def preflight(status: dict, info: dict, tray: int) -> None:
     slot_desc = "external spool" if tray in (254, 255) else "AMS tray"
     if not matching or matching.get('tray_type') != info['material']:
         raise SendError(f'Selected {slot_desc} is missing or its material differs from the sliced file.')
+    if tray in EXTERNAL_SLOTS and not force_external:
+        ams_matches = matching_ams_slots_on_nozzle(status, hw_nozzle_id, info['material'], is_h2d=is_h2d)
+        if ams_matches:
+            labels = ', '.join(slot_label(s, is_h2d=is_h2d) for s in ams_matches)
+            ext_name = slot_label(tray, is_h2d=is_h2d)
+            first_label = slot_label(ams_matches[0], is_h2d=is_h2d)
+            raise SendError(
+                f'Selected external spool {ext_name} may be stale: live AMS slot(s) {labels} on the same nozzle already hold {info["material"]}. '
+                f'Use --tray {first_label} or pass --force-external if the external spool is physically fed.'
+            )
     if info.get('printer_model') == 'Bambu Lab P1S':
         diameter = status.get('nozzle_diameter')
     else:
@@ -422,7 +465,13 @@ def live_tray(status: dict, tray: int) -> dict:
         match = [t for t in status.get('trays', []) if str(t.get('ams_id')) == str(tray // 4) and str(t.get('id')) == str(tray % 4)]
     return match[0] if len(match) == 1 else {}
 
-def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mismatch: bool = False) -> None:
+def preflight_multi(
+    status: dict,
+    info: dict,
+    trays: list[int],
+    allow_color_mismatch: bool = False,
+    force_external: bool = False,
+) -> None:
     """Every filament's slot must hold its material and colour, on the AMS that feeds its nozzle."""
     if status.get('gcode_state') not in IDLE_STATES:
         raise SendError(f'Printer is {status.get("gcode_state", "unknown")}; refusing to interrupt an active job.')
@@ -434,6 +483,7 @@ def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mism
     side = {0: 'right', 1: 'left'}
     problems = []
     is_h2d = info.get('printer_model') == 'Bambu Lab H2D'
+    claimed_ams = {t for t in trays if 0 <= t < 16}
     for f, tray in zip(filaments, trays):
         label = slot_label(tray, is_h2d=is_h2d)
         if is_h2d:
@@ -449,6 +499,16 @@ def preflight_multi(status: dict, info: dict, trays: list[int], allow_color_mism
         want, have = rgba_hex(f.get('color'))[:6], rgba_hex(live.get('tray_color'), fallback='')[:6]
         if want != have and not allow_color_mismatch:
             problems.append(f"filament {f['id']} is #{want} but {label} reports #{have or 'no colour'}")
+        if tray in EXTERNAL_SLOTS and not force_external:
+            want_color = None if allow_color_mismatch else f.get('color')
+            ams_matches = matching_ams_slots_on_nozzle(
+                status, f['hw_nozzle_id'], f['type'], is_h2d=is_h2d, color=want_color, exclude=claimed_ams
+            )
+            if ams_matches:
+                labels = ', '.join(slot_label(s, is_h2d=is_h2d) for s in ams_matches)
+                problems.append(
+                    f"filament {f['id']} selects external {label} while unused AMS slot(s) {labels} already hold matching {f['type']} (use that AMS slot in --ams-map or pass --force-external)"
+                )
     if problems:
         raise SendError('AMS map refused: ' + '; '.join(problems) + '.')
     for hw in sorted({f['hw_nozzle_id'] for f in filaments}):
@@ -714,6 +774,7 @@ def main(argv=None) -> int:
     parser.add_argument('--external', action='store_true', dest='no_ams', help='Print from external spool / bypass AMS')
     parser.add_argument('--ams-map', help='Multi-filament plates: one AMS slot per filament in filament order, e.g. B3,B1,B2,A4 (A1..D4 or 0..15)')
     parser.add_argument('--allow-color-mismatch', action='store_true', help='Accept --ams-map slots whose reported colour differs from the sliced colour')
+    parser.add_argument('--force-external', action='store_true', help='Allow external spool even when a matching AMS slot exists on the same nozzle')
     parser.add_argument('--plate', type=int, default=1)
     parser.add_argument('--start', action='store_true', help='Upload and submit one print after preflight')
     parser.add_argument('--repeat', action='store_true', help='Explicitly permit another attempt for this file after checking prior outcome')
@@ -778,14 +839,15 @@ def run_locked(args, path, info, connection, cache, printer_key) -> int:
     if rc:
         raise SendError('Live printer connection failed; no print was submitted.')
     status = merged_status(events)
+    force_external = getattr(args, 'force_external', False)
     if multi:
-        preflight_multi(status, info, trays, getattr(args, 'allow_color_mismatch', False))
+        preflight_multi(status, info, trays, getattr(args, 'allow_color_mismatch', False), force_external=force_external)
         for row in report['ams_map']:
             live = live_tray(status, row['tray'])
             print(f"  filament {row['filament']} {row['type']} {row['color']} -> {row['slot']} ({live.get('tray_type')} "
                   f"#{rgba_hex(live.get('tray_color'), fallback='')[:6]}), {row['nozzle']} nozzle", flush=True)
     else:
-        preflight(status, info, args.tray)
+        preflight(status, info, args.tray, force_external=force_external)
     preflight_report = {k: status[k] for k in ('gcode_state', 'subtask_name', 'model_id', 'trays', 'nozzles', 'nozzle_diameter', 'buildplate_marker_detector') if k in status}
     plate_info = describe_plate(status.get('plate'))
     if plate_info:

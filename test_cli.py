@@ -247,16 +247,17 @@ class CLITests(unittest.TestCase):
                 bambu.main(['print','fixture.gcode.3mf','--host','printer.example',*flags])
                 self.assertEqual('--no-timelapse' in legacy.call_args.args[0],forwarded)
     def test_print_forwards_no_ams_and_external_tray(self):
-        for flags, expect_no_ams, expect_tray in [
-            (['--no-ams'], True, None),
-            (['--external'], True, None),
-            (['--tray', 'ext-r'], False, 'ext-r'),
-            (['--no-ams', '--tray', '255'], True, '255'),
+        for flags, expect_no_ams, expect_tray, expect_force in [
+            (['--no-ams'], True, None, False),
+            (['--external'], True, None, False),
+            (['--tray', 'ext-r'], False, 'ext-r', False),
+            (['--no-ams', '--tray', '255', '--force-external'], True, '255', True),
         ]:
             with self.subTest(flags=flags), mock.patch.object(core, 'main', return_value=0) as legacy:
                 bambu.main(['check', 'fixture.gcode.3mf', '--host', 'printer.example', *flags])
                 argv = legacy.call_args.args[0]
                 self.assertEqual('--no-ams' in argv, expect_no_ams)
+                self.assertEqual('--force-external' in argv, expect_force)
                 if expect_tray:
                     self.assertIn('--tray', argv)
                     self.assertEqual(argv[argv.index('--tray') + 1], expect_tray)

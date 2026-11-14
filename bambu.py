@@ -248,6 +248,8 @@ def legacy_print(args) -> int:
             argv += ['--ams-map', args.ams_map]
         if getattr(args, 'allow_color_mismatch', False):
             argv += ['--allow-color-mismatch']
+        if getattr(args, 'force_external', False):
+            argv += ['--force-external']
         if args.command == 'print':
             argv += ['--start']
         if args.repeat:
@@ -312,6 +314,7 @@ def build_parser():
         p.add_argument('--external', action='store_true', dest='no_ams', help='Print from external spool / bypass AMS')
         p.add_argument('--ams-map', help='Multi-filament plates: one AMS slot per filament in filament order, e.g. B3,B1,B2,A4')
         p.add_argument('--allow-color-mismatch', action='store_true', help='Accept --ams-map slots whose colour differs from the slice')
+        p.add_argument('--force-external', action='store_true', help='Allow external spool even when a matching AMS slot exists on the same nozzle')
         p.add_argument('--repeat', action='store_true', help='Intentionally reprint a file with an existing receipt')
         p.add_argument('--no-timelapse', action='store_true', help='Skip the printer camera timelapse for this job')
         p.add_argument('--no-cloud-record', action='store_true', help='Start via raw LAN MQTT without registering a Bambu Handy cloud history task')

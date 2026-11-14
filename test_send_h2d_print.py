@@ -241,6 +241,91 @@ class SenderSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(sender.SendError, '--no-ams was specified but tray'):
                 sender.main([str(self.path), '--host', 'printer.example', '--no-ams', '--tray', '1'])
 
+    def test_stale_external_spool_rejected_when_matching_ams_exists_unless_forced(self):
+        left_asa = self.fixture(mapping='1', material='ASA')
+        status = {
+            'gcode_state': 'FINISH', 'model_id': 'O1D', 'command': 'push_status',
+            'ams_units': [{'id': '0', 'info': '51001103'}, {'id': '1', 'info': '50002003'}],
+            'trays': [
+                {'ams_id': '0', 'id': '0', 'tray_type': 'PLA', 'tray_color': 'DCDCDCFF'},
+                {'ams_id': '0', 'id': '1', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+                {'ams_id': '1', 'id': '2', 'tray_type': 'HIPS', 'tray_color': 'FFFFFFFF'},
+                {'ams_id': '255', 'id': '254', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+            ],
+            'nozzles': [{'id': 0, 'diameter': 0.4}, {'id': 1, 'diameter': 0.4}],
+        }
+        with self.assertRaisesRegex(sender.SendError, r'A2.*--force-external'):
+            sender.preflight(status, left_asa, 254)
+        sender.preflight(status, left_asa, 254, force_external=True)
+
+        # Matching ASA on the opposite-nozzle AMS (AMS 1 -> right) does not block Ext-L, nor does mismatched AMS material (PLA).
+        other_side = dict(status, trays=[
+            {'ams_id': '0', 'id': '0', 'tray_type': 'PLA', 'tray_color': 'DCDCDCFF'},
+            {'ams_id': '1', 'id': '1', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+            {'ams_id': '255', 'id': '254', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+        ])
+        sender.preflight(other_side, left_asa, 254)
+
+        # P1S catches matching AMS slot too unless forced.
+        p1s_info = self.fixture(model='Bambu Lab P1S', mapping='1', plate_model='C12', material='PETG')
+        p1s_status = {'gcode_state': 'FINISH', 'model_id': 'C12', 'nozzle_diameter': '0.4',
+                      'trays': [{'ams_id': '0', 'id': '1', 'tray_type': 'PETG'},
+                                {'id': '254', 'ams_id': '255', 'tray_type': 'PETG'}]}
+        with self.assertRaisesRegex(sender.SendError, r'A2.*--force-external'):
+            sender.preflight(p1s_status, p1s_info, 254)
+        sender.preflight(p1s_status, p1s_info, 254, force_external=True)
+
+        # CLI forwards --force-external for both --tray ext-l and --no-ams.
+        connection = {'serial': 'TEST_PRINTER', 'ip': 'printer.example'}
+        with mock.patch.object(sender, 'load_connection', return_value=connection), \
+             mock.patch.object(sender, 'bridge_run', return_value=([status], 0)), \
+             mock.patch.object(sender.Path, 'home', return_value=Path(self.temp.name)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.fixture(mapping='1', material='ASA')
+            with self.assertRaisesRegex(sender.SendError, r'A2'):
+                sender.main([str(self.path), '--host', 'printer.example', '--tray', 'ext-l'])
+            with self.assertRaisesRegex(sender.SendError, r'A2'):
+                sender.main([str(self.path), '--host', 'printer.example', '--no-ams'])
+            self.assertEqual(sender.main([str(self.path), '--host', 'printer.example', '--tray', 'ext-l', '--force-external']), 0)
+            self.assertEqual(sender.main([str(self.path), '--host', 'printer.example', '--no-ams', '--force-external']), 0)
+
+    def test_multi_preflight_external_guards_matching_unused_ams_slot(self):
+        gcode = b'; dual asa hips fixture\n'
+        with zipfile.ZipFile(self.path, 'w') as z:
+            z.writestr('Metadata/project_settings.config', json.dumps({'printer_model': 'Bambu Lab H2D', 'curr_bed_type': 'High Temp Plate', 'layer_height': '0.12'}))
+            z.writestr('Metadata/plate_1.gcode', gcode)
+            z.writestr('Metadata/plate_1.gcode.md5', hashlib.md5(gcode).hexdigest())
+            z.writestr('Metadata/slice_info.config',
+                       '<config><plate><metadata key="printer_model_id" value="O1D"/><metadata key="index" value="1"/>'
+                       '<metadata key="filament_maps" value="1 2"/><metadata key="prediction" value="100"/><metadata key="weight" value="40"/>'
+                       '<filament id="1" type="ASA" nozzle_diameter="0.40" color="#F72323" tray_info_idx="GFB61" used_g="34"/>'
+                       '<filament id="2" type="HIPS" nozzle_diameter="0.40" color="#FFFFFF" tray_info_idx="GFS98" used_g="4"/></plate></config>')
+        info = sender.inspect_file(self.path)
+        trays = sender.parse_ams_map('ext-l,B3', filaments=info['filaments'])
+        status = {
+            'gcode_state': 'FINISH', 'model_id': 'O1D',
+            'ams_units': [{'id': '0', 'info': '51001103'}, {'id': '1', 'info': '50002003'}],
+            'trays': [
+                {'ams_id': '0', 'id': '1', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+                {'ams_id': '1', 'id': '2', 'tray_type': 'HIPS', 'tray_color': 'FFFFFFFF'},
+                {'ams_id': '255', 'id': '254', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+            ],
+            'nozzles': [{'id': 0, 'diameter': 0.4}, {'id': 1, 'diameter': 0.4}],
+        }
+        with self.assertRaisesRegex(sender.SendError, r'A2.*--force-external'):
+            sender.preflight_multi(status, info, trays)
+        sender.preflight_multi(status, info, trays, force_external=True)
+
+        # Different colour on unused AMS slot does not block unless allow_color_mismatch=True.
+        diff_color = dict(status, trays=[
+            {'ams_id': '0', 'id': '1', 'tray_type': 'ASA', 'tray_color': '161616FF'},
+            {'ams_id': '1', 'id': '2', 'tray_type': 'HIPS', 'tray_color': 'FFFFFFFF'},
+            {'ams_id': '255', 'id': '254', 'tray_type': 'ASA', 'tray_color': 'F72323FF'},
+        ])
+        sender.preflight_multi(diff_color, info, trays)
+        with self.assertRaisesRegex(sender.SendError, r'A2.*--force-external'):
+            sender.preflight_multi(diff_color, info, trays, allow_color_mismatch=True)
+
     # --- multi-filament plates (one --ams-map slot per filament) ---
     COLORS = ['#161616','#4D3324','#4F3F24','#847D48','#AE835B','#D3B7A7','#F72323','#E8DBB7']
     MAP = 'A3,A1,A2,B4,B2,B1,A4,B3'
